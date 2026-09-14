@@ -185,6 +185,27 @@ class PgStore:
                VALUES ($1,$2,$3,$4)""",
             _uuid(session_id), plan_hash, confirmed, raw_reply)
 
+    # ══════════════ 模型调用日志（成本与延迟的唯一数据来源）══════════════
+    async def log_llm_call(self, *, thread_id: str | None, role: str, model: str,
+                           latency_ms: int, prompt_tokens: int | None,
+                           completion_tokens: int | None, ok: bool,
+                           error: str | None = None) -> None:
+        """记一次模型调用。
+
+        ★ 调用方（模型网关）会把这里包在 try/except 里：**记日志失败绝不影响对话**。
+          这是刻意的 —— 它是观测，不是业务。
+        ★ token 拿不到时写 NULL 而不是 0：写 0 会被成本报表误读成"这次没花钱"，
+          而真相是"不知道" —— 两种含义在报表里必须区分得开。
+        """
+        await self._execute(
+            """INSERT INTO app.llm_call_log
+               (thread_id, role, model, latency_ms, prompt_tokens, completion_tokens, ok, error)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+            thread_id, role, model, int(latency_ms),
+            None if prompt_tokens is None else int(prompt_tokens),
+            None if completion_tokens is None else int(completion_tokens),
+            bool(ok), error)
+
     # ══════════════ 工单 ══════════════
     async def create_handoff_ticket(self, *, session_id: str, thread_id: str,
                                     user_id: str | None, reason: str, priority: str,

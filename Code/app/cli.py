@@ -22,6 +22,7 @@ from typing import Any
 from langgraph.types import Command
 
 from .runtime import Runtime, create_runtime
+from .services import trace
 from .settings import Settings
 
 # 控制台 UTF-8 兜底已在 app/__init__.py 里开启（导入本模块时必然先执行），
@@ -55,32 +56,35 @@ async def run_turn(rt: Runtime, session_id: str, text: str, *,
     config = rt.config(session_id)
     state = {"session_id": session_id, "user_input": text, "channel": "cli",
              "user_id": user_id, "attachments": []}
-    result = await rt.graph.ainvoke(state, config)
+    # 把本轮 thread_id 放进上下文，模型网关据此把每次调用记到 app.llm_call_log 上。
+    # CLI 在同一个任务里连跑多轮，所以用带还原的 turn_scope。
+    with trace.turn_scope(str(config["configurable"]["thread_id"])):
+        result = await rt.graph.ainvoke(state, config)
 
-    # ── interrupt：等用户确认（接口层里这是另一个 HTTP 请求）──
-    pending = result.get("__interrupt__")
-    if pending:
-        payload = pending[0].value
-        if verbose:
-            print(f"\n[暂停] 图已挂起，等待用户确认：\n{_indent(payload.get('plan', ''))}")
-            print(f"   方案哈希：{(payload.get('plan_hash') or '')[:16]}…")
-        confirmed = auto_confirm
-        if confirmed is None:
-            # ★ 非交互环境（CI、`< /dev/null`、被父进程捕获 stdin）下 input() 会抛
-            #   EOFError。默认当成"用户没确认"处理并明确说明，而不是甩一屏 traceback
-            #   ——因为"读不到输入"和"代码有 bug"对使用者是完全不同的两件事。
-            try:
-                answer = input("   是否确认执行？[y/N] ").strip().lower()
-                confirmed = answer in ("y", "yes")
-            except EOFError:
-                confirmed = False
-                if verbose:
-                    print("   （无交互输入，按【未确认】处理：方案已作废，未执行任何操作）")
-        result = await rt.graph.ainvoke(
-            Command(resume={"confirmed": bool(confirmed),
-                            "plan_hash": payload.get("plan_hash")}),
-            config)
-        result["__resumed__"] = True
+        # ── interrupt：等用户确认（接口层里这是另一个 HTTP 请求）──
+        pending = result.get("__interrupt__")
+        if pending:
+            payload = pending[0].value
+            if verbose:
+                print(f"\n[暂停] 图已挂起，等待用户确认：\n{_indent(payload.get('plan', ''))}")
+                print(f"   方案哈希：{(payload.get('plan_hash') or '')[:16]}…")
+            confirmed = auto_confirm
+            if confirmed is None:
+                # ★ 非交互环境（CI、`< /dev/null`、被父进程捕获 stdin）下 input() 会抛
+                #   EOFError。默认当成"用户没确认"处理并明确说明，而不是甩一屏 traceback
+                #   ——因为"读不到输入"和"代码有 bug"对使用者是完全不同的两件事。
+                try:
+                    answer = input("   是否确认执行？[y/N] ").strip().lower()
+                    confirmed = answer in ("y", "yes")
+                except EOFError:
+                    confirmed = False
+                    if verbose:
+                        print("   （无交互输入，按【未确认】处理：方案已作废，未执行任何操作）")
+            result = await rt.graph.ainvoke(
+                Command(resume={"confirmed": bool(confirmed),
+                                "plan_hash": payload.get("plan_hash")}),
+                config)
+            result["__resumed__"] = True
 
     if verbose:
         _print_result(result)

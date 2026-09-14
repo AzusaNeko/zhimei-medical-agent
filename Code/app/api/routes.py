@@ -30,6 +30,7 @@ from langgraph.types import Command
 from ..graph import progress
 from ..runtime import Runtime
 from ..services import text as T
+from ..services import trace
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
                      EVENT_STATUS, SSE_HEADERS, error_event, map_patch, ping, sse)
 from .schemas import ChatIn, ConfirmIn, CreateSessionIn, HealthOut, MessageOut, SessionOut
@@ -142,6 +143,11 @@ async def _event_source(rt: Runtime, session_id: str,
                         graph_input: Any) -> AsyncIterator[str]:
     """把图的执行过程翻译成 SSE 流。无论成功失败都必须释放在途标记。"""
     turn_id: str | None = None
+    # 把本轮 thread_id 放进上下文：模型网关据此把每次调用记到 app.llm_call_log。
+    # ★ 这里用不带还原的 set_turn 而非 turn_scope：ASGI 每个请求本来就是独立任务、
+    #   持有上下文的副本，请求结束整个上下文一起丢弃，不存在"漏给下一个请求"；
+    #   而在异步生成器里跨 yield 做 reset 反而可能踩到 token 不匹配。
+    trace.set_turn(session_id)
     try:
         async for item in _with_heartbeat(
                 lambda: rt.graph.astream(graph_input, rt.config(session_id),

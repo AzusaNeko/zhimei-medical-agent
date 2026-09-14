@@ -25,6 +25,7 @@ from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
 from app.graph.build import build_graph  # noqa: E402
+from app.services import trace  # noqa: E402
 from app.services.deps import Deps  # noqa: E402
 from app.services.rules import RuleEngine  # noqa: E402
 from app.settings import Settings  # noqa: E402
@@ -43,17 +44,22 @@ def section(title: str) -> None:
 
 
 async def turn(graph, deps, thread: str, text: str) -> dict:
-    return await graph.ainvoke(
-        {"session_id": thread, "user_input": text, "channel": "smoke", "attachments": []},
-        {"configurable": {"thread_id": thread},
-         "recursion_limit": deps.settings.recursion_limit})
+    # 与应用入口（cli.run_turn / api._event_source）保持一致：把 thread_id 放进上下文，
+    # 模型网关据此把每次调用归属到具体对话。不设的话 llm_call_log.thread_id 会是 NULL
+    # —— 日志照样能记，但归不到哪一轮，成本报表就串不起来。
+    with trace.turn_scope(thread):
+        return await graph.ainvoke(
+            {"session_id": thread, "user_input": text, "channel": "smoke", "attachments": []},
+            {"configurable": {"thread_id": thread},
+             "recursion_limit": deps.settings.recursion_limit})
 
 
 async def resume(graph, deps, thread: str, payload: dict, confirmed: bool) -> dict:
-    return await graph.ainvoke(
-        Command(resume={"confirmed": confirmed, "plan_hash": payload.get("plan_hash")}),
-        {"configurable": {"thread_id": thread},
-         "recursion_limit": deps.settings.recursion_limit})
+    with trace.turn_scope(thread):
+        return await graph.ainvoke(
+            Command(resume={"confirmed": confirmed, "plan_hash": payload.get("plan_hash")}),
+            {"configurable": {"thread_id": thread},
+             "recursion_limit": deps.settings.recursion_limit})
 
 
 async def main() -> int:
@@ -119,9 +125,13 @@ async def main() -> int:
     t3 = "smoke-bk3"
     s3 = await turn(graph, deps, t3, "帮我把热玛吉的预约改到浦东店周五下午")
     p3 = s3["__interrupt__"][0].value
-    tampered = await graph.ainvoke(
-        Command(resume={"confirmed": True, "plan_hash": "tampered"}),
-        {"configurable": {"thread_id": t3}, "recursion_limit": deps.settings.recursion_limit})
+    # 这一步直接调 graph.ainvoke（因为要伪造 plan_hash，不能用 resume 助手），
+    # 所以必须自己带上 turn 上下文 —— 否则这一轮里所有模型调用的 thread_id 都会是 NULL。
+    # （第 9 节的断言就是这么发现的：日志能记，但归不到具体对话。）
+    with trace.turn_scope(t3):
+        tampered = await graph.ainvoke(
+            Command(resume={"confirmed": True, "plan_hash": "tampered"}),
+            {"configurable": {"thread_id": t3}, "recursion_limit": deps.settings.recursion_limit})
     check("方案哈希不符时绝不执行", not tampered.get("execution_result"))
     check("哈希不符被记录为 mismatch", tampered.get("confirm_result") == "mismatch",
           str(tampered.get("confirm_result")))
@@ -233,6 +243,24 @@ async def main() -> int:
           decide(UNKNOWN, 1) == "ungrounded" and decide(UNKNOWN, 3) == "loop_out")
     check("核对没返回任何 claims → 按硬问题处理（空 claims 不能当成通过）",
           decide([], 1) == "ungrounded" and decide([], 3) == "loop_out")
+
+    # ══════════════ 9 模型调用日志 ══════════════
+    section("9. 模型调用日志（成本与延迟的唯一数据来源）")
+    # 为什么在 fake 档位测这个：日志链路（网关 → sink → 存储）跟模型真假无关，
+    # 在 fake 里测就能发现"忘了接线""thread_id 没传"这类问题，
+    # 不必等到配好真实 API key、跑完一轮、再去数据库里翻。
+    calls = deps.pg.llm_calls
+    check("模型调用被记录", len(calls) > 0, f"{len(calls)} 条")
+    check("每条都带角色与耗时",
+          all(c.get("role") and isinstance(c.get("latency_ms"), int) for c in calls),
+          str(calls[:1]))
+    check("记录了 thread_id（能归属到具体某一轮对话）",
+          all(c.get("thread_id") for c in calls),
+          str([c.get("thread_id") for c in calls if not c.get("thread_id")][:3]))
+    roles = sorted({c["role"] for c in calls})
+    check("覆盖多个角色（说明不是只接了某一个入口）", len(roles) >= 4, str(roles))
+    check("成功调用都标记为 ok", all(c["ok"] for c in calls),
+          str([c for c in calls if not c["ok"]][:2]))
 
     await deps.shutdown()
 

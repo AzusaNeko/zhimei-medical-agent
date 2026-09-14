@@ -6,6 +6,7 @@
   · structured() 走 JSON 模式 + Pydantic 校验，失败重试一次，再失败抛错由调用方降级
   · 家族（family）用于判断"复核是否真正独立" —— 审计要如实记录
   · ScriptedGateway 是「还没配 API key 时验证图接线」用的假实现，不参与生产路径
+  · 每次调用都记一行到 app.llm_call_log（见 _CallLogger）—— 成本与延迟的唯一数据来源
 """
 
 from __future__ import annotations
@@ -13,12 +14,14 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any, Awaitable, Callable, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from ..settings import Settings
+from . import trace
 
 try:  # openai 未安装时不影响 fake 档位运行
     from openai import AsyncOpenAI
@@ -97,15 +100,61 @@ class ModelGateway(Protocol):
     async def text(self, role: str, *, system: str, user: str) -> str: ...
 
 
+#: 调用日志的落点。签名 (role, model, latency_ms, prompt_tokens, completion_tokens,
+#: ok, error)。由 Deps.build 接到 pg.log_llm_call 上。
+#: 做成可注入的回调而不是让网关直接依赖存储层：网关不需要知道数据存在哪。
+CallSink = Callable[..., "Awaitable[None]"]
+
+
+class _CallLogger:
+    """把每次模型调用记一行到 app.llm_call_log。
+
+    ★ 三条硬约束：
+      1. **绝不抛异常**。记日志失败绝不能影响对话 —— 它是观测，不是业务。
+         这里连"落点不存在"都容忍（未注入 sink 时静默跳过）。
+      2. **重试分别记**。`structured()` 校验失败会重试一次，两次都记。
+         只看最终成功与否的话，"模型有多少比例的输出不合 schema"这个
+         最该被发现的信号就被抹平了。
+      3. **token 用量从响应里取**，拿不到就留空（不要填 0 —— 0 会被误读成"没花钱"）。
+    """
+
+    def __init__(self, sink: CallSink | None = None) -> None:
+        self._sink = sink
+
+    def bind(self, sink: CallSink | None) -> None:
+        self._sink = sink
+
+    async def record(self, *, role: str, model: str, started: float,
+                     resp: Any = None, ok: bool, error: str | None = None) -> None:
+        if self._sink is None:
+            return
+        try:
+            usage = getattr(resp, "usage", None) if resp is not None else None
+            await self._sink(
+                thread_id=trace.current_turn_id(),
+                role=role,
+                model=model,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                prompt_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+                completion_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+                ok=ok,
+                error=(error or None) and error[:300],
+            )
+        except Exception:  # noqa: BLE001
+            # 有意吞掉：日志写不进去是运维问题，不该让用户的一轮对话失败
+            pass
+
+
 # ════════════════════════════════════════════════════════════════
 #  真实实现：DeepSeek（OpenAI 兼容）
 # ════════════════════════════════════════════════════════════════
 class DeepSeekGateway:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, sink: CallSink | None = None) -> None:
         if AsyncOpenAI is None:
             raise LLMError("未安装 openai SDK：pip install openai")
         self.settings = settings
         self.roles = build_role_table(settings)
+        self._log = _CallLogger(sink)
         self._main = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
         self._esc = None
         if settings.escalation_base_url and settings.escalation_api_key:
@@ -125,6 +174,7 @@ class DeepSeekGateway:
         spec = self.roles.get(role) or self.roles["classify"]
         client = self._client_for(role)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        started = time.perf_counter()
         try:
             resp = await asyncio.wait_for(
                 client.chat.completions.create(
@@ -134,9 +184,14 @@ class DeepSeekGateway:
                 timeout=spec.timeout,
             )
         except asyncio.TimeoutError as exc:
+            await self._log.record(role=role, model=spec.model, started=started,
+                                   ok=False, error=f"timeout {spec.timeout}s")
             raise LLMTimeout(f"{role} 超时（{spec.timeout}s）") from exc
         except Exception as exc:  # noqa: BLE001
+            await self._log.record(role=role, model=spec.model, started=started,
+                                   ok=False, error=f"{type(exc).__name__}: {exc}")
             raise LLMError(f"{role} 调用失败：{exc}") from exc
+        await self._log.record(role=role, model=spec.model, started=started, resp=resp, ok=True)
         return (resp.choices[0].message.content or "").strip()
 
     async def structured(self, role: str, schema: type[TModel], *, system: str, user: str) -> TModel:
@@ -149,6 +204,8 @@ class DeepSeekGateway:
         last_err: Exception | None = None
         raw = ""
         for attempt in (1, 2):
+            resp: Any = None          # ★ 每轮重置：否则校验失败时会误用上一次的 token 用量
+            started = time.perf_counter()
             try:
                 kwargs: dict[str, Any] = dict(
                     model=spec.model, messages=messages,
@@ -159,15 +216,28 @@ class DeepSeekGateway:
                 resp = await asyncio.wait_for(
                     client.chat.completions.create(**kwargs), timeout=spec.timeout)
                 raw = (resp.choices[0].message.content or "").strip()
-                return schema.model_validate_json(_extract_json(raw))
+                parsed = schema.model_validate_json(_extract_json(raw))
+                await self._log.record(role=role, model=spec.model, started=started,
+                                       resp=resp, ok=True)
+                return parsed
             except asyncio.TimeoutError as exc:
+                await self._log.record(role=role, model=spec.model, started=started,
+                                       ok=False, error=f"timeout {spec.timeout}s")
                 raise LLMTimeout(f"{role} 超时（{spec.timeout}s）") from exc
             except ValidationError as exc:
+                # 调用本身是成功的（有 token 消耗），失败在"输出不符合 schema"。
+                # 这一类必须单独可见：它一多就说明 prompt 或 schema 该改了。
+                await self._log.record(role=role, model=spec.model, started=started,
+                                       resp=resp, ok=False,
+                                       error=f"schema(attempt {attempt}): {exc}")
                 last_err = exc
                 messages.append({"role": "assistant", "content": raw})
                 messages.append({"role": "user",
                                  "content": "上次输出不符合 JSON Schema，请只输出合法 JSON，不要任何解释文字。"})
             except Exception as exc:  # noqa: BLE001
+                await self._log.record(role=role, model=spec.model, started=started,
+                                       resp=resp, ok=False,
+                                       error=f"{type(exc).__name__}: {exc}")
                 raise LLMError(f"{role} 调用失败：{exc}") from exc
         raise LLMError(f"{role} 结构化输出两次均不合格：{last_err}")
 
@@ -198,11 +268,12 @@ class ScriptedGateway:
     这样一条命令就能看到完整的「审查 → 修订 → 复审 → 放行」闭环。
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, sink: CallSink | None = None) -> None:
         self.settings = settings
         self.roles = build_role_table(settings)
         self.calls: dict[str, int] = {}
         self.trace: list[str] = []
+        self._log = _CallLogger(sink)
 
     def family_of(self, role: str) -> str:
         return "scripted"
@@ -213,15 +284,20 @@ class ScriptedGateway:
 
     async def text(self, role: str, *, system: str, user: str) -> str:
         self.trace.append(f"text:{role}")
+        # 假实现也记一行：这样"日志链路是否接对"在 fake 档位就能验证，
+        # 不必等到接上真实 API key 才发现漏了。
+        await self._log.record(role=role, model="scripted", started=time.perf_counter(), ok=True)
         return "（fake 档位）"
 
     async def structured(self, role: str, schema: type[TModel], *, system: str, user: str) -> TModel:
         n = self._nth(role)
         self.trace.append(f"structured:{role}#{n}")
+        started = time.perf_counter()
         payload = _scripted_payload(role, n, user)
-        if payload is not None:
-            return schema.model_validate(payload)
-        return _default_for(schema, role, user)
+        out = (schema.model_validate(payload) if payload is not None
+               else _default_for(schema, role, user))
+        await self._log.record(role=role, model="scripted", started=started, ok=True)
+        return out
 
 
 def _user_question(prompt: str) -> str:

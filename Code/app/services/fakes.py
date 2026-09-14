@@ -111,6 +111,9 @@ class FakePg:
         self.handoff_events: list[dict] = []
         self.misreports: list[dict] = []
         self.sessions: dict[str, dict] = {}
+        #: 模型调用日志（与 PgStore.log_llm_call 同形）——
+        #: 放在 fake 里是为了让"日志链路是否接对"在不需要 Postgres 时也能验证
+        self.llm_calls: list[dict] = []
         self.appointments: dict[str, dict] = {
             "AP-1001": {"appointment_id": "AP-1001", "status": "booked", "version": 1,
                         "project": "热玛吉", "store": "浦东店",
@@ -118,6 +121,16 @@ class FakePg:
         }
 
     # ── 会话与权限 ──
+    async def log_llm_call(self, *, thread_id: str | None, role: str, model: str,
+                           latency_ms: int, prompt_tokens: int | None,
+                           completion_tokens: int | None, ok: bool,
+                           error: str | None = None) -> None:
+        self.llm_calls.append({
+            "thread_id": thread_id, "role": role, "model": model,
+            "latency_ms": latency_ms, "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens, "ok": ok, "error": error,
+        })
+
     async def get_session(self, session_id: str) -> dict:
         return self.sessions.setdefault(session_id, {
             "session_id": session_id, "user_id": "U-0001", "ai_enabled": True,

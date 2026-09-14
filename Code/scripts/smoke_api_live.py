@@ -230,6 +230,14 @@ async def main() -> int:
             report_errors(ev1)
             pend = first(ev1, "awaiting_confirmation")
             check("操作类请求挂起等待确认", pend is not None, str(names(ev1)))
+            if pend is None:
+                # 这一节依赖"库里有一条 status='booked' 的热玛吉预约"。
+                # 上一次跑这里真的执行过改约的话，那条记录就变成 'changed' 了，
+                # 而改约只能作用于 booked —— 于是本轮会走"查不到可改约的预约"的
+                # 诚实降级路径。这是正确行为，不是缺陷，但**必须把话说清楚**，
+                # 否则看到的就是几个费解的失败，还以为代码坏了。
+                print("    ↑ 提示：预约可能已被上一次运行消耗（改约成功后 status 变 changed）。")
+                print("      先跑一次 python scripts/seed_kb.py 复位演示数据，再重跑本脚本。")
             check("挂起时带回方案哈希与过期时间",
                   bool((pend or {}).get("plan_hash")) and bool((pend or {}).get("expires_at")))
             check("挂起时【没有】提前输出业务正文（未确认不得出站）",
@@ -250,6 +258,7 @@ async def main() -> int:
             p2 = first(ev2, "awaiting_confirmation")
             if p2 is None:
                 check("第二次也为操作类请求挂起", False, str(names(ev2)))
+                print("    ↑ 提示：同上 —— 预约已被消耗，先跑 python scripts/seed_kb.py 复位。")
             else:
                 _, _, ev3 = await sse(client, "POST", f"/api/chat/{s_ok}/confirm",
                                       {"confirmed": True, "plan_hash": p2.get("plan_hash")})

@@ -50,23 +50,26 @@ class Deps:
 
         if settings.is_fake:
             from . import fakes
-            llm = llm_mod.ScriptedGateway(settings)
-            encoder, reranker = fakes.FakeEncoder(), fakes.FakeReranker()
             vector_store, pg = fakes.FakeVectorStore(), fakes.FakePg()
+            encoder, reranker = fakes.FakeEncoder(), fakes.FakeReranker()
+            # ★ 先建 pg 再建网关：网关要拿 pg.log_llm_call 当调用日志的落点
+            llm = llm_mod.ScriptedGateway(settings, sink=pg.log_llm_call)
         else:
             from .encoder import BgeM3Encoder
             from .milvus_store import MilvusHybridStore
             from .pg import PgStore
             from .reranker import BgeReranker
             settings.validate()
-            llm = llm_mod.DeepSeekGateway(settings)
+            pg = PgStore(settings.pg_dsn)
+            # ★ 网关拿到的是"往哪写"的回调，而不是存储层本身：
+            #   模型网关不需要知道数据存在哪，也不该依赖具体数据库。
+            llm = llm_mod.DeepSeekGateway(settings, sink=pg.log_llm_call)
             encoder = BgeM3Encoder(settings.bge_m3_path, device=settings.embed_device,
                                    concurrency=settings.embed_concurrency)
             reranker = BgeReranker(settings.bge_reranker_path, device=settings.rerank_device,
                                    concurrency=settings.rerank_concurrency)
             vector_store = MilvusHybridStore(settings.milvus_uri, settings.milvus_collection,
                                              token=settings.milvus_token)
-            pg = PgStore(settings.pg_dsn)
 
         return cls(settings=settings, llm=llm, rules=rules, security=security,
                    encoder=encoder, reranker=reranker, vector_store=vector_store, pg=pg)
