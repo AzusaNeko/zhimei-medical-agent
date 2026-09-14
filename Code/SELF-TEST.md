@@ -199,17 +199,51 @@ python -m app.cli --demo --user <user_id>
 
 ```bash
 python -m app.api --port 8077                # 另开一个终端
-python scripts/demo_api.py --base http://127.0.0.1:8077
+python scripts/demo_api.py --base http://127.0.0.1:8077 --user <user_id>
 ```
 
 - [ ] 三个场景的事件流与 fake 档位一致：`status…` → `final` / `awaiting_confirmation` → `done`
 - [ ] 预约场景：`⏸ 等待确认` 后流结束，`/confirm` 恢复后才有 `final`
 - [ ] 紧急场景：`final` 与 `handoff` **两个事件都出现**（并行出口）
 - [ ] 过程事件里的文案是固定的几句，**不含模型生成内容**
+- [ ] 预约场景带上 `--user` 后，改约是**真的执行**（回执里有预约编号），不是停在挂起
 
 ```bash
 python scripts/smoke_api.py                  # 26 项（会强制走 fake 档位，用于回归）
 ```
+
+### 6b. ⭐ 真实 HTTP 冒烟（服务必须真的起着）
+
+```bash
+# 终端 A
+python -m app.api --host 127.0.0.1 --port 8090
+# 终端 B
+python scripts/smoke_api_live.py --base http://127.0.0.1:8090 --user <user_id>   # 40 项
+```
+
+**为什么它和 `smoke_api.py` 不是重复的**：`smoke_api.py` 走 `httpx.ASGITransport`，
+请求在**同一个进程内**直接交给 ASGI 应用，不经过 uvicorn 的启动流程、不经过网络。
+实测它至少漏掉三类问题，全都是"服务根本不可用"级别的：
+
+| 漏掉的问题 | 现象 | 为什么进程内测试看不到 |
+|---|---|---|
+| uvicorn 事件循环 | `python -m app.api` **启动即失败**（psycopg 不能在 ProactorEventLoop 上跑） | 它压根不经过 uvicorn |
+| 坐席 id 类型 | 运营后台「接单」在真实库上 **100% 失败** | fake 是内存字典，非 UUID 字符串照收 |
+| 时间戳类型 | 同上，「关单」也失败 | fake 对 ISO 字符串照收 |
+
+- [ ] `GET /api/health` 返回 `profile=real`、`checkpointer=postgres`
+- [ ] SSE 的所有 `status` 文案都来自 `STAGE_TEXT` 固定话术表（正文没混进过程通道）
+- [ ] 篡改 `plan_hash` 后流程走完，但**绝不执行**
+- [ ] 坐席接单后，聊天接口返回 **409 `human_takeover`**；关单后恢复正常
+- [ ] `GET /ops/panel` 是页面、`GET /ops/stream?once=true` 首帧是 `snapshot`
+- [ ] 未知角色返回 403
+
+> ⚠️ **`python -m app.api` 在 Windows 上的一个坑**（已修，但换机器/升级 uvicorn 后要留意）：
+> uvicorn 把 Windows 的默认事件循环**硬编码**成 `ProactorEventLoop`，而 psycopg 的异步
+> 连接只认 `SelectorEventLoop`。更绕的是 uvicorn 对 `loop="auto"` 和 `loop="asyncio"`
+> **都**返回 Proactor，所以在 `__main__.py` 里 `set_event_loop_policy()` 完全没用
+> （循环是在策略生效之前就建好的）。解决办法是给 uvicorn 传一个自定义循环工厂：
+> `loop="app.api.loop:selector_loop_factory"`。详见 `app/api/loop.py` 的注释。
 
 ---
 
@@ -409,14 +443,31 @@ python -m app.cli -t "下周三下午能约浦东店的热玛吉吗，另外这�
 | 7 | 同一句改约两次运行结论不同（一次放行执行、一次转人工 P1） | 三个审查角色的 `temperature=0.1`，审查是**判定**却带采样随机性 | 假模型不走温度 |
 | 8 | 空 `claims` 被当成"核对通过" | `kb_enough = not unsupported`，而 `not []` 为真 → **什么都没核对**的草稿直接放行 | 同类：假模型不会返回空 claims |
 
+以下是**起真实 HTTP 服务**（`python -m app.api`）才暴露的一批 —— 前 8 条是真实依赖，
+这 4 条是"真实网络 + 真实服务器进程"：
+
+| # | 现象 | 真实原因 | 为什么进程内测试测不出来 |
+|---|---|---|---|
+| 9 | `python -m app.api` **启动即失败**（`Psycopg cannot use the 'ProactorEventLoop'`） | uvicorn 把 Windows 的循环硬编码成 ProactorEventLoop，而 `loop="auto"` 与 `loop="asyncio"` **都**返回 Proactor；`set_event_loop_policy()` 也救不了（循环在策略生效前就建好了）→ 必须传自定义循环工厂 | `httpx.ASGITransport` 不经过 uvicorn 的启动流程 |
+| 10 | 运营后台「接单」在真实库上 **100% 失败（500）** | `ops.agent_user.agent_id` / `handoff_ticket.assigned_to` 是 **UUID 列**，而代码自己的默认坐席是 `'demo-agent-0001'` | fake 是内存字典，非 UUID 字符串照单全收 → 36 项运营冒烟全绿 |
+| 11 | 「关单」同样 500 | `update_ticket` 把值原样绑定，而调用方传的是 `.isoformat()` 字符串；asyncpg 的 TIMESTAMPTZ 只收 `datetime` 对象 | 同上：fake 对字符串照收 |
+| 12 | 图执行中抛异常时，用户**什么都收不到** | `_event_source` 只发一个 `error` 事件就结束：没有回答、没有工单、也没人说会跟进 —— 而对客系统里"静默失败"是最糟的一种失败 | 需要真实发生一次异常才看得到，而 fake 档位不会异常 |
+
 两条结论，建议带进真实档位的自测：
 
 - **fake 档位证明的是"接线对"，不是"功能对"。** 它做得越省事（忽略参数、恒返回成功、
-  恒返回 verified），就越会以"帮你测过了"的方式骗你。第 4、5 两条都是这样漏过去的。
+  恒返回 verified、对任何类型照收），就越会以"帮你测过了"的方式骗你。
+  第 4、5、10、11 条都是这样漏过去的 —— 它们的共同形状是"**fake 比真实世界宽容**"。
 - **报错信息本身要当验收项。** 第 4 条如果直接说"缺少 appointment_id"，
   五分钟就能定位；说成"状态已变化"，会让排查方向整个偏到并发冲突上。
   一个误导性的报错，比一个直接的报错贵得多。
 
-修复后回归：`smoke` 53 项 + `smoke_api` 26 项 + `smoke_ops` 36 项 = **115 项全过**，
-`check_env` 18 通过 / 2 提醒 / 0 阻塞，`check_retrieval` 检索链路 OK，
+第 10、11 条还留下一条更普遍的教训：**同一个概念在两张表里用了不同类型**
+（`ops.handoff_event.actor` 是 TEXT，`assigned_to` 却是 UUID）。这种"同概念不同型"
+本身就是坏味道，看到时应当直接统一，而不是去迁就它。判断标准写在
+`sql/schema.sql` 末尾的「类型约定」里：**系统自己生成的 id 用 UUID，
+外部系统给定的 id 用 TEXT**。
+
+修复后回归：`smoke` 53 + `smoke_api` 26 + `smoke_ops` 36 + `smoke_api_live` 40
+= **155 项全过**，`check_env` 18 通过 / 2 提醒 / 0 阻塞，`check_retrieval` 检索链路 OK，
 真实档位 `--demo` 四场景退出码 0。

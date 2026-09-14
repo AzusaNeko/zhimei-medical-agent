@@ -2,7 +2,11 @@
 接口层演示：把真实的 SSE 事件流打出来（面试演示用）。
 
 用法（先起服务）：
-    python -m app.api --profile fake --port 8077        # 另开一个终端
+    python -m app.api --port 8090                        # 另开一个终端（真实档位）
+    python scripts/demo_api.py --base http://127.0.0.1:8090 --user <user_id>
+
+    # 不想连外部依赖时：
+    python -m app.api --profile fake --port 8077
     python scripts/demo_api.py --base http://127.0.0.1:8077
 
 它会跑三个场景并把每个事件逐行打印：
@@ -11,6 +15,10 @@
   3. 术后紧急    → 已审模板提示（final）+ 创建 P0 工单（handoff）两个事件并行
 
 看这个脚本能直观理解一件事：**过程可以流式，正文永远整段发送**。
+
+★ --user 不是可选项而是关键：不绑用户时会话的 auth.verified=false，
+  预约类请求会被判 need_info（这是设计如此，不是 bug）。要看到"改约真的执行"，
+  必须带上种子脚本打印的那个 user_id。
 """
 
 from __future__ import annotations
@@ -19,8 +27,17 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import httpx
+
+# ★ 导入 app 包以启用控制台 UTF-8 兜底。
+#   本脚本原先只 import httpx，于是拿不到 app/__init__.py 里的那层保护 ——
+#   而它偏偏要打印 ✅ ⏸ ⛔ 👤 这些**不在 GBK 里**的符号。
+#   结果是：直接在终端跑一切正常，一旦输出被重定向（管道/写日志/CI 捕获），
+#   Windows 下退回 GBK 就会 UnicodeEncodeError 直接崩。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import app  # noqa: E402,F401  （导入即生效：app/__init__.py 会调用 enable_utf8）
 
 
 async def stream(client: httpx.AsyncClient, method: str, url: str, *, body: dict,
@@ -83,6 +100,8 @@ SCENARIOS = [
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:8077")
+    parser.add_argument("--user", default=None,
+                        help="绑定用户 id（见 seed_kb.py 输出）。不绑的话预约类请求会被判 need_info")
     args = parser.parse_args()
 
     async with httpx.AsyncClient(base_url=args.base, timeout=60) as client:
@@ -97,7 +116,8 @@ async def main() -> int:
             print("\n" + "═" * 68)
             print(f"▶ {title}\n  用户：{text}")
             print("═" * 68)
-            sid = (await client.post("/api/sessions", json={"channel": "demo"})).json()["session_id"]
+            sid = (await client.post("/api/sessions",
+                                     json={"channel": "demo", "user_id": args.user})).json()["session_id"]
             events = await stream(client, "POST", f"/api/chat/{sid}/stream", body={"text": text})
 
             pending = next((d for n, d in events if n == "awaiting_confirmation"), None)

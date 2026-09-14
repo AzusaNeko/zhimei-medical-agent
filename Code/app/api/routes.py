@@ -176,6 +176,18 @@ async def _event_source(rt: Runtime, session_id: str,
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001
+        # ★ 兜底转人工，而不是只发一个 error 就结束。
+        #
+        #   原来的写法是"发个 error 事件，流结束"，后果是：用户问了一句话，
+        #   收到的只有静默失败 —— 没有回答、没有工单、也没有人说会跟进。
+        #   对客系统里这是最糟的一种失败：用户以为系统坏了，而运营侧根本不知道
+        #   有人被晾在那里。
+        #
+        #   这与项目里其它地方的取向是一致的（"审查失败绝不能当成通过 → 转人工"）：
+        #   宁可多转一次人工，也不要让用户对着空气说话。
+        #   error 事件照旧发出，异常类型与信息不丢，运营侧仍然看得见问题。
+        ticket = await _force_handoff(rt, session_id, reason="internal_error", priority="P1")
+        yield sse(EVENT_HANDOFF, ticket)
         yield sse(*error_event("internal", f"{type(exc).__name__}: {exc}"))
     finally:
         await rt.end(session_id)

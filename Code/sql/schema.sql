@@ -297,7 +297,7 @@ CREATE TABLE IF NOT EXISTS ops.handoff_ticket (
   profile_summary TEXT,
   last_turns    JSONB NOT NULL DEFAULT '[]',
   risk_report   JSONB NOT NULL DEFAULT '{}',
-  assigned_to   UUID,
+  assigned_to   TEXT,                 -- ★ TEXT 而不是 UUID，理由见文件末尾「类型约定」
   accepted_at   TIMESTAMPTZ,          -- ★ 非空后才允许告知用户"人工已接入"
   closed_at     TIMESTAMPTZ,
   close_reason  TEXT,
@@ -315,7 +315,11 @@ CREATE TABLE IF NOT EXISTS ops.handoff_event (
 );
 
 CREATE TABLE IF NOT EXISTS ops.agent_user (
-  agent_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- ★ agent_id 是 TEXT 而不是 UUID：坐席 id 来自机构既有的客服/SSO 系统
+  --   （工号、"zhangsan" 这种），强制 UUID 等于要求每个接入方额外维护一张映射表，
+  --   是纯粹的过度约束。而且代码里自己的默认坐席就是 'demo-agent-0001'（非 UUID），
+  --   与 UUID 列直接冲突 —— 接单接口会 500。详见文件末尾「类型约定」。
+  agent_id TEXT PRIMARY KEY,
   name     TEXT NOT NULL,
   role     TEXT NOT NULL DEFAULT 'service',   -- service | doctor | compliance | admin
   on_duty  BOOLEAN NOT NULL DEFAULT false,
@@ -345,3 +349,30 @@ CREATE TABLE IF NOT EXISTS app.llm_call_log (
   error          TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ══════════════════════════════════════════════════════════════
+--  类型约定：什么该是 UUID，什么该是 TEXT
+--
+--  这条约定是踩过坑之后写下来的，改表结构前请先读一遍。
+--
+--  · UUID —— 只用于【本系统自己生成】的实体主键：
+--    session_id / ticket_id / appointment_id / user_id …
+--    它们的共同点是"生成者就是我们"，用 UUID 便于分布式生成且不暴露数量。
+--
+--  · TEXT —— 用于【外部系统给定的标识】：
+--    agent_id（客服系统/SSO 的工号）、operator、actor、project_id（机构项目编码）、
+--    doc_id、rule_id …
+--    这些 id 长什么样由对接方决定。把它们设成 UUID 会强制每个接入方额外维护
+--    一张映射表，属于纯粹的过度约束，而且一旦对接方给的 id 不是 UUID，
+--    报错会发生在**运行期最深的一条 SQL 上**，表现为一个毫无线索的 500。
+--
+--  ★ 实际踩到的例子：`ops.agent_user.agent_id` 和 `ops.handoff_ticket.assigned_to`
+--    原来都是 UUID，而代码里自己的默认坐席是 `'demo-agent-0001'`。
+--    于是运营后台的「接单」在真实 Postgres 上 100% 失败：
+--      asyncpg.exceptions.DataError: invalid input for query argument $3:
+--      'agent-001' (invalid UUID 'agent-001': length must be between 32..36 characters)
+--    而 fake 档位是内存字典、照单全收，所以 36 项运营冒烟全绿也照样漏过去。
+--    同一个概念在 `ops.handoff_event.actor` 里是 TEXT、在 `assigned_to` 里却是 UUID，
+--    这种**同概念不同型**本身就是坏味道，发现时应当直接统一，而不是去迁就它。
+-- ══════════════════════════════════════════════════════════════
+

@@ -345,6 +345,14 @@ class PgStore:
         cols = {k: v for k, v in fields.items() if k in self._TICKET_FIELDS}
         if not cols:
             return await self.get_ticket(ticket_id)
+        # ★ 时间戳列必须转成 datetime 再绑定：asyncpg 只接受 datetime 对象，
+        #   传 ISO 字符串会直接 DataError（expected a datetime.date or datetime.datetime
+        #   instance, got 'str'）。调用方（ops/service.py）传的是 .isoformat() 字符串，
+        #   而 fake 档位是内存字典、存什么读什么都行 —— 于是 36 项运营冒烟全绿，
+        #   真实库上「接单」却 100% 失败。
+        #   转换放在存储层是有意的：数据库类型的映射本来就该由它负责，
+        #   否则每多一个调用点就多一次踩坑的机会。
+        cols = {k: (_ts(v) if k in _TICKET_TS_FIELDS else v) for k, v in cols.items()}
         assigns = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(cols))
         await self._execute(
             f"UPDATE ops.handoff_ticket SET {assigns} WHERE ticket_id = $1",
@@ -438,6 +446,32 @@ class PgStore:
 # ── 小工具 ──
 _JSON_COLUMNS = {"last_turns", "risk_report", "meta", "payload", "preferences",
                  "contraindications", "panel_reviews", "hard_rule_hits"}
+
+#: ops.handoff_ticket 里的时间戳列（值可能以 ISO 字符串形式传进来）
+_TICKET_TS_FIELDS = {"accepted_at", "closed_at"}
+
+
+def _ts(value: Any) -> Any:
+    """把 ISO 字符串转成 datetime；已经是 datetime / None 就原样返回。
+
+    asyncpg 的参数绑定是**强类型**的：TIMESTAMPTZ 列只接受 datetime 对象，
+    给字符串会抛 `DataError: ... (expected a datetime.date or datetime.datetime
+    instance, got 'str')`。
+
+    ★ 这类"字符串 vs 类型化值"的不匹配是 fake 档位最擅长掩盖的一类缺陷：
+      FakePg 是内存字典，`'2026-09-14T07:54:39+00:00'` 存进去、读出来都毫无问题；
+      真实 asyncpg 会直接拒绝。而且报错发生在最深的一条 SQL 上，
+      第一眼看上去像"数据库有问题"，实际是调用方少转了一次类型。
+      同一个文件里已经因为同类原因踩过两次（UUID 列收了非 UUID 字符串）。
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return value
+    return value
 
 
 def _row(row: Any) -> dict:
