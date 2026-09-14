@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智美 · 多 Agent 工作流</title>
+<style>
+:root{--ink:#19344a;--muted:#586d7b;--line:#d7e1e7;--accent:#226b62;--track:#eef2f5;--thumb:#9aaebc}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--thumb) var(--track)}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:var(--track)}::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:8px}::-webkit-scrollbar-thumb:hover{background:#728d9e}::-webkit-scrollbar-thumb:active{background:#526d7e}
+html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:#f3f6f8;color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif}
+header,main,footer{max-width:1500px;margin:auto;padding:28px 36px}
+header{padding-top:42px} .eyebrow{font:12px/1.6 Consolas,monospace;color:var(--accent);letter-spacing:2px}
+h1{font-size:34px;letter-spacing:-1px;line-height:1.4;margin:12px 0}p{color:var(--muted);margin:8px 0}
+nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}a,button,summary{cursor:pointer}nav a,button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:8px 14px;color:var(--ink);font:inherit;text-decoration:none}nav a:hover,button:hover{background:#e8f2f0;border-color:#75a69a}button:active{background:#d7e8e3}button:disabled{opacity:.5;cursor:wait}a:focus-visible,button:focus-visible,summary:focus-visible,.viewport:focus-visible{outline:3px solid #2c788f;outline-offset:3px}
+main{padding-top:0}.diagram-card{background:white;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:0 0 32px;scroll-margin-top:24px}
+.card-head{padding:24px 28px;border-bottom:1px solid var(--line)}.heading-line{display:flex;justify-content:space-between;align-items:center;gap:16px}.index{font:12px Consolas,monospace;color:var(--accent)}h2{font-size:22px;margin:2px 0 6px}.tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.tools button{font-size:13px;padding:6px 10px}.zoom-label{font:12px Consolas,monospace;width:45px;text-align:center}
+.viewport{overflow:auto;padding:28px;min-height:250px;max-height:1000px;background-color:#fff;background-image:radial-gradient(#e2e9ee .8px,transparent .8px);background-size:18px 18px;scrollbar-gutter:stable}.diagram{margin:auto; width:100%;min-width:1000px}.diagram svg{display:block;width:100%;height:auto;max-width:none!important}
+details{border-top:1px solid var(--line);padding:14px 28px}summary{width:fit-content;color:var(--accent);font-weight:600}summary:hover{text-decoration:underline}pre{background:#f3f6f8;padding:20px;overflow:auto;font:13px/1.7 Consolas,monospace;tab-size:2;max-height:420px;white-space:pre}.source-tools{margin:12px 0}.source-note{font-size:12px;color:var(--muted)}.render-status{padding:12px 0;color:var(--muted)}footer{padding-top:0;font-size:12px;color:var(--muted)}#feedback{position:fixed;bottom:18px;right:20px;max-width:calc(100vw - 40px);padding:10px 18px;background:var(--ink);color:#fff;border-radius:8px;z-index:10}#feedback:empty{display:none}
+.section-intro{margin:18px 0 16px}.section-intro h2{font-size:25px;margin:0 0 4px}.agent-spec{margin:0 0 32px;scroll-margin-top:24px}.agent-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.agent-card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}.agent-card header{padding:17px 18px 12px;border-bottom:1px solid var(--line)}.agent-card h3{margin:2px 0 0;font-size:17px}.agent-card .agent-id{font:11px Consolas,monospace;color:var(--accent)}.agent-card ul{list-style:none;margin:0;padding:8px 18px 14px}.agent-card li{display:grid;grid-template-columns:1fr auto;gap:9px;align-items:start;padding:10px 0;border-bottom:1px solid #e9eef1}.agent-card li:last-child{border-bottom:0}.node-name{font-weight:600;font-size:13px;line-height:1.45}.node-desc{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.55;margin-top:-5px}.model-badge{white-space:nowrap;font:11px/1.25 Consolas,monospace;padding:4px 6px;border-radius:4px;background:#eaf2f8;color:#315c7c}.model-badge.text{background:#e9f4f1;color:#25685d}.model-badge.vision{background:#f2edfa;color:#694e91}.model-badge.retrieval{background:#edf1fa;color:#4f638e}.model-badge.rule{background:#fff1ed;color:#9a5143}.agent-card.risk-card{border-color:#d99a8c}.agent-card.risk-card header{background:#fff8f6}.agent-card.post-card{border-color:#c9b8e5}.model-legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}.model-legend span{font-size:12px;color:var(--muted)}
+.detail-section{margin:0 0 36px;scroll-margin-top:24px}.detail-header{display:grid;grid-template-columns:minmax(0,1fr) minmax(270px,.58fr);gap:24px;align-items:end;margin:8px 0 16px}.detail-header h2{font-size:28px;margin:3px 0}.detail-header p{margin:0}.pathline{padding:14px 16px;background:#e8f2f0;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;color:#315a58;font-size:13px}.pathline b{display:block;color:var(--ink);font:11px Consolas,monospace;margin-bottom:4px}.node-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.node-detail{position:relative;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 16px 15px;min-height:175px}.node-detail .step{display:block;color:var(--accent);font:11px Consolas,monospace;margin-bottom:8px}.node-detail h3{font-size:16px;line-height:1.35;margin:0 0 9px}.node-detail p{font-size:12px;line-height:1.62;margin:0 0 12px}.node-detail .model-badge{position:absolute;right:14px;bottom:13px}.knowledge-detail .detail-header{border-left:4px solid #438b77;padding-left:16px}.risk-detail .detail-header{border-left:4px solid #c17768;padding-left:16px}.risk-detail .node-detail{border-color:#ecd5d0}.risk-detail .node-detail:nth-child(3),.risk-detail .node-detail:nth-child(4),.risk-detail .node-detail:nth-child(5){background:#fffafa}
+.tuning-section{margin:0 0 38px;scroll-margin-top:24px}.tuning-stance{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 14px}.stance-card{padding:16px 18px;border-radius:10px;border:1px solid var(--line);background:#fff}.stance-card.good{background:#e9f4f1;border-color:#b4d8ce}.stance-card.caution{background:#fff8f6;border-color:#ead2cc}.stance-card b{display:block;font-size:14px;margin-bottom:4px}.stance-card p{font-size:12px;margin:0}.tuning-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.tuning-card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:17px;min-height:198px}.tuning-card h3{font-size:16px;line-height:1.4;margin:8px 0}.tuning-card p{font-size:12px;line-height:1.62;margin:8px 0}.tuning-card .model-badge{display:inline-block}.tuning-card .tuning-method{font:11px Consolas,monospace;color:#315a58}.tuning-card.freeze{background:#f8f7fb;border-color:#d9d1e7}.tuning-card.freeze .tuning-method{color:#694e91}
+@media(max-width:980px){.agent-grid,.node-detail-grid,.tuning-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-header{grid-template-columns:1fr}}@media(max-width:700px){header,main,footer{padding-left:16px;padding-right:16px}h1{font-size:27px}.heading-line{align-items:flex-start;flex-direction:column}.card-head{padding:18px}.viewport{padding:12px}details{padding:12px 18px}.agent-grid,.node-detail-grid,.tuning-grid,.tuning-stance{grid-template-columns:1fr}.agent-card header{padding:16px}.agent-card ul{padding-left:16px;padding-right:16px}.detail-header{gap:14px}.detail-header h2{font-size:24px}.node-detail{min-height:154px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media(forced-colors:active){*{scrollbar-color:auto}}
+@media print{nav,.tools,details,#feedback{display:none}.viewport{max-height:none;overflow:visible;padding:0}.diagram{min-width:0!important;width:100%!important}.diagram-card{break-inside:avoid}header,main{padding:10px}.card-head{padding:10px}body{background:#fff}}
+</style>
+</head>
+<body>
+<header><div class="eyebrow">ZHIMEI / WORKFLOW BLUEPRINT</div><h1>智能医美顾问 · 多 Agent 工作流</h1><p>分层 Supervisor 架构 · 9 个 Agent · 3 条业务链路 · 统一风险审查</p>
+<nav aria-label="流程导航"><a href="#flow-0">架构总览</a><a href="#flow-1">售前科普咨询</a><a href="#flow-2">预约 / 改约 / 取消</a><a href="#flow-3">术后护理与医疗风险预警</a><a href="#flow-4">开源模型路由</a><a href="#agent-nodes">Agent 节点设计</a><a href="#knowledge-detail">科普 Agent 细化</a><a href="#risk-detail">风险审查细化</a><a href="#fine-tuning">微调策略</a></nav></header>
+<main><section class="diagram-card" id="flow-0" data-graph="0">
+<div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 01 / FLOWCHART</span><h2>整体多 Agent 架构</h2></div><div class="tools" aria-label="整体多 Agent 架构图表工具"><button type="button" data-action="minus" aria-label="缩小整体多 Agent 架构">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大整体多 Agent 架构">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>总控统一路由，专业 Agent 协作，所有输出与敏感操作汇入风险审查。虚线表示上下文或知识依赖。</p><span class="source-note">可缩放并横向滚动查看；下方可展开标准 Mermaid 源码。</span></div>
+<div class="viewport" tabindex="0" role="region" aria-label="整体多 Agent 架构，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="整体多 Agent 架构"></div></div>
+<details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>flowchart TB
+    U(["用户输入"]) --&gt; S["总控调度 Agent"]
+    subgraph Entry["入口与调度层"]
+      S --&gt; I["意图识别与分流 Agent"]
+      I --&gt; D{"总控按意图分派"}
+    end
+    subgraph Pre["售前咨询层"]
+      K["知识科普 Agent"]
+      R["项目推荐 Agent"]
+      C["资质与门店查询 Agent"]
+    end
+    subgraph Fulfillment["履约与售后层"]
+      B["预约管理 Agent"]
+      P["术后护理与随访 Agent"]
+    end
+    D --&gt;|科普| K
+    D --&gt;|推荐| R
+    D --&gt;|门店或医生| C
+    D --&gt;|预约或改约| B
+    D --&gt;|术后| P
+    D --&gt;|意图不明确| Clarify["生成澄清问题"]
+    M[("客户画像与记忆 Agent")] -.-&gt; K
+    M -.-&gt; R
+    M -.-&gt; B
+    M -.-&gt; P
+    KB[("经审核知识库 / RAG")] -.-&gt; K
+    KB -.-&gt; P
+    K -.-&gt;|项目知识| R
+    K --&gt; A["总控聚合草稿 / 操作请求"]
+    R --&gt; A
+    C --&gt; A
+    B --&gt; A
+    P --&gt; A
+    Clarify --&gt; A
+    subgraph Gate["风险审查 Agent · 必经关卡"]
+      A --&gt; Review["法规 / 医疗 / 广告多专家并行审查"]
+      Review --&gt; Rules["结合硬规则，取最高风险等级"]
+      Rules --&gt; Verdict{"审查结论"}
+    end
+    Verdict --&gt;|需修改| Retry{"修改次数少于 2 次？"}
+    Retry --&gt;|是：计数加一| Revise["退回专业 Agent 修订，重新进入风险审查"]
+    Retry --&gt;|否| H["转人工：画像摘要 + 最近 5 轮对话 + 风险报告"]
+    Verdict --&gt;|高风险| H
+    Verdict --&gt;|通过| Type{"输出类型"}
+    Type --&gt;|回复| O(["发送已审查回复"])
+    Type --&gt;|操作请求| Execute["执行已审核且已确认的操作"]
+    Execute --&gt; Receipt["生成真实执行结果回复"]
+    Receipt --&gt; Recheck["风险审查 Agent：审核执行结果回复"]
+    Recheck --&gt; Final{"结果回复通过？"}
+    Final --&gt;|是| O
+    Final --&gt;|否：仅修改回复或转人工| H
+    classDef core fill:#e9f1ff,stroke:#4771a5,color:#173451;
+    classDef service fill:#eaf5f1,stroke:#438b77,color:#174f42;
+    classDef risk fill:#fff0ed,stroke:#ca5a49,color:#8d3024,stroke-width:2px;
+    classDef human fill:#fff6df,stroke:#b88927,color:#704d0a;
+    class S,I,D,A core;
+    class K,R,C,B,P,M,KB service;
+    class Review,Rules,Verdict risk;
+    class H,Retry human;</code></pre></details></section><section class="diagram-card" id="flow-1" data-graph="1">
+<div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 02 / SEQUENCE</span><h2>售前科普咨询</h2></div><div class="tools" aria-label="售前科普咨询图表工具"><button type="button" data-action="minus" aria-label="缩小售前科普咨询">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大售前科普咨询">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>例：热玛吉和超声炮有什么区别？知识检索、草稿审查、最多两次修订与人工兜底形成闭环。</p><span class="source-note">可缩放并横向滚动查看；下方可展开标准 Mermaid 源码。</span></div>
+<div class="viewport" tabindex="0" role="region" aria-label="售前科普咨询，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="售前科普咨询"></div></div>
+<details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant S as 总控调度
+    participant I as 意图分流
+    participant K as 知识科普
+    participant M as 画像记忆
+    participant DB as 审核知识库
+    participant R as 风险审查
+    participant H as 人工客服
+    U-&gt;&gt;S: 咨询项目区别
+    S-&gt;&gt;I: 识别意图与紧急程度
+    I--&gt;&gt;S: 科普咨询
+    S-&gt;&gt;K: 分派科普任务
+    K-&gt;&gt;M: 获取经授权的相关上下文
+    M--&gt;&gt;K: 返回相关信息（如有）
+    K-&gt;&gt;DB: RAG 检索项目原理、流程、恢复信息
+    DB--&gt;&gt;K: 返回资料与来源
+    K--&gt;&gt;S: 科普草稿 + 来源 + 免责声明
+    S-&gt;&gt;R: 提交完整待发送内容
+    R--&gt;&gt;S: 通过 / 需修改 / 转人工
+    loop 仅需修改且未通过时，最多 2 次
+      S-&gt;&gt;K: 返回审查意见
+      K--&gt;&gt;S: 修订草稿
+      S-&gt;&gt;R: 重新审查完整回复
+      R--&gt;&gt;S: 更新审查结论
+    end
+    alt 最终通过
+      S--&gt;&gt;U: 已审查科普回复
+      Note over S,U: 仅供参考，具体请以医生面诊为准
+    else 高风险或修订耗尽仍不通过
+      S-&gt;&gt;H: 移交上下文与审查报告
+      Note over H,U: 人工接管咨询
+    end</code></pre></details></section><section class="diagram-card" id="flow-2" data-graph="2">
+<div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 03 / SEQUENCE</span><h2>预约 / 改约 / 取消</h2></div><div class="tools" aria-label="预约 / 改约 / 取消图表工具"><button type="button" data-action="minus" aria-label="缩小预约 / 改约 / 取消">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大预约 / 改约 / 取消">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>先查询实际业务规则，审核并确认操作后执行；执行结果同样接受内容审查。退款时间与扣费规则以业务系统记录为准。</p><span class="source-note">可缩放并横向滚动查看；下方可展开标准 Mermaid 源码。</span></div>
+<div class="viewport" tabindex="0" role="region" aria-label="预约 / 改约 / 取消，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="预约 / 改约 / 取消"></div></div>
+<details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant S as 总控调度
+    participant B as 预约管理
+    participant DB as 预约系统
+    participant R as 风险审查
+    participant H as 人工客服
+    U-&gt;&gt;S: 发起预约、改约或取消请求
+    S-&gt;&gt;B: 分派预约任务
+    B-&gt;&gt;DB: 查询档期、预约归属与适用规则
+    DB--&gt;&gt;B: 实际状态、费用规则及可执行条件
+    B--&gt;&gt;S: 操作方案 + 待确认文案
+    S-&gt;&gt;R: 审核操作风险与确认文案
+    R--&gt;&gt;S: 审核结论
+    alt 审核通过
+      S--&gt;&gt;U: 展示已审查方案与操作影响
+      U-&gt;&gt;S: 明确确认
+      S-&gt;&gt;B: 执行已确认且已审核的方案
+      B-&gt;&gt;DB: 校验状态并幂等执行
+      DB--&gt;&gt;B: 成功 / 失败 / 状态变化
+      B--&gt;&gt;S: 返回真实执行结果
+      S-&gt;&gt;R: 审核结果回复
+      R--&gt;&gt;S: 回复审查结论
+      alt 结果回复通过
+        S--&gt;&gt;U: 返回已审查执行结果
+      else 结果回复不通过
+        S-&gt;&gt;H: 移交执行记录与审查意见
+        Note over S,H: 此处只修订回复，不重复执行操作
+      end
+    else 需修改方案
+      S-&gt;&gt;B: 修改后重新提交审核，最多 2 次
+      Note over S,R: 超限转人工，审核通过前不执行
+    else 高风险
+      S-&gt;&gt;H: 转人工处理扣费、退费或争议
+      Note over H,U: 人工核实规则并确认处理方案
+    end</code></pre></details></section><section class="diagram-card" id="flow-3" data-graph="3">
+<div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 04 / SEQUENCE</span><h2>术后护理与医疗风险预警</h2></div><div class="tools" aria-label="术后护理与医疗风险预警图表工具"><button type="button" data-action="minus" aria-label="缩小术后护理与医疗风险预警">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大术后护理与医疗风险预警">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>异常风险交给医师评估。系统提供知识支持与风险分流，不根据对话直接作出诊断。</p><span class="source-note">可缩放并横向滚动查看；下方可展开标准 Mermaid 源码。</span></div>
+<div class="viewport" tabindex="0" role="region" aria-label="术后护理与医疗风险预警，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="术后护理与医疗风险预警"></div></div>
+<details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant S as 总控调度
+    participant I as 意图分流
+    participant P as 术后护理
+    participant DB as 护理知识库
+    participant R as 风险审查
+    participant H as 值班医师
+    U-&gt;&gt;S: 描述术后症状与发生时间
+    S-&gt;&gt;I: 识别术后意图及紧急信号
+    I--&gt;&gt;S: 术后咨询 + 紧急程度
+    alt 存在紧急风险信号
+      S-&gt;&gt;R: 优先审查风险提示与转人工请求
+      R--&gt;&gt;S: 已审查的提示 + 转人工结论
+      S--&gt;&gt;U: 发出已审查风险提示
+      S-&gt;&gt;H: 立即移交症状、对话与风险报告
+    else 常规术后咨询
+      S-&gt;&gt;P: 分派护理咨询
+      P-&gt;&gt;DB: 检索已审核护理资料
+      DB--&gt;&gt;P: 护理知识与适用边界
+      P--&gt;&gt;S: 护理草稿 + 初步风险标签
+      S-&gt;&gt;R: 医疗风险与内容审查
+      R--&gt;&gt;S: 审查结论
+      alt 通过
+        S--&gt;&gt;U: 已审查护理建议 + 面诊提示
+      else 内容需修改
+        S-&gt;&gt;P: 按意见修订并复审，最多 2 次
+        Note over S,R: 通过才发送，超限转医师
+      else 中高风险或不确定
+        S-&gt;&gt;H: 移交画像摘要、最近 5 轮对话与报告
+        Note over H,U: 医师接管评估及后续处理
+      end
+    end</code></pre></details></section>
+<section class="diagram-card" id="flow-4" data-graph="4">
+<div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 05 / OPEN-WEIGHT MODEL ROUTING</span><h2>开源模型与规则节点路由</h2></div><div class="tools" aria-label="开源模型与规则节点路由图表工具"><button type="button" data-action="minus" aria-label="缩小开源模型与规则节点路由">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大开源模型与规则节点路由">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>Qwen 负责高频理解与业务草稿；DeepSeek-R1 和 InternVL 在升级场景中承担独立复核，规则与业务系统掌握最终执行权。</p><span class="source-note">同源模型不自我裁决：高风险或模型意见冲突时，必须引入不同模型家族或人工复核。</span></div>
+<div class="viewport" tabindex="0" role="region" aria-label="开源模型与规则节点路由，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="开源模型与规则节点路由"></div></div>
+<details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>flowchart TB
+    U["用户文本、图片或文档"] --&gt; G["媒体接入、授权和文件安全"]
+    G --&gt; T8["Qwen3-8B\n意图、字段、摘要、问题改写"]
+    G --&gt; V8["Qwen3-VL-8B-Instruct\nOCR、图片质量、非诊断性观察"]
+    V8 --&gt;|图片不清晰、图文矛盾或风险线索| IVL["InternVL3.5\n独立视觉交叉复核"]
+    T8 --&gt; KB["BGE-M3 + bge-reranker-v2-m3\n混合检索与证据排序"]
+    KB --&gt; T30["Qwen3-30B-A3B-Instruct\n科普、推荐、预约与护理草稿"]
+    T8 --&gt; T30
+    V8 --&gt; T30
+    T30 --&gt; R0["规则与业务系统\n身份、权限、价格、档期、阻断条件"]
+    IVL --&gt; R32["Qwen3-32B\n首次医疗边界、广告语义与证据复核"]
+    T30 --&gt; R32
+    R0 --&gt; Escalate{"高风险或模型意见冲突？"}
+    R32 --&gt; Escalate
+    IVL --&gt; Escalate
+    Escalate --&gt;|是| DS["DeepSeek-R1\n独立二次语义复核"]
+    Escalate --&gt;|否| D{"确定性决策表"}
+    DS --&gt; D
+    D --&gt;|通过| O["发送已审查回复"]
+    D --&gt;|可修订| Fix["退回专业 Agent 修订后复审"]
+    D --&gt;|高风险 / 紧急| H["人工客服或值班医师接管"]
+    R0 --&gt;|已确认且审核通过| E["预约等业务系统执行"]
+    classDef text fill:#e9f4f1,stroke:#438b77,color:#174f42;
+    classDef vision fill:#f2edfa,stroke:#8065a9,color:#49386b;
+    classDef retrieval fill:#edf1fa,stroke:#6c83aa,color:#35466d;
+    classDef rule fill:#fff1ed,stroke:#c17768,color:#823f33;
+    classDef risk fill:#fff6df,stroke:#b88927,color:#704d0a;
+    classDef judge fill:#f2edfa,stroke:#8065a9,color:#49386b;
+    class T8,T30 text;
+    class V8 vision;
+    class KB retrieval;
+    class G,R0,E rule;
+    class R32,D,H,Fix risk;
+    class IVL,DS,Escalate judge;</code></pre></details></section>
+<section class="agent-spec" id="agent-nodes" aria-labelledby="agent-nodes-title">
+  <div class="section-intro"><span class="index">NODE CATALOG / OPEN-WEIGHT DEPLOYMENT</span><h2 id="agent-nodes-title">每个 Agent 的内部节点与模型职责</h2><p>模型负责理解、提取和表达；检索模型负责召回资料；规则和业务系统负责真实状态、权限、执行与最终判定。</p><div class="model-legend" aria-label="模型图例"><span><b class="model-badge text">文本模型</b> Qwen3 系列</span><span><b class="model-badge vision">视觉模型</b> Qwen3-VL 系列</span><span><b class="model-badge retrieval">检索模型</b> BGE 系列</span><span><b class="model-badge rule">规则 / 工具</b> 不调用大模型</span></div></div>
+  <div class="agent-grid">
+    <article class="agent-card"><header><div class="agent-id">01 / SUPERVISOR</div><h3>总控调度 Agent</h3></header><ul><li><span class="node-name">输入标准化与会话关联</span><b class="model-badge rule">规则 / 工作流</b><span class="node-desc">绑定会话、用户、渠道和任务状态。</span></li><li><span class="node-name">多意图识别与字段抽取</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">高频结构化理解，输出意图、槽位和优先级。</span></li><li><span class="node-name">任务规划与结果聚合</span><b class="model-badge text">Qwen3-30B-A3B</b><span class="node-desc">编排多 Agent 结果，形成待审草稿。</span></li><li><span class="node-name">重试、状态与审计</span><b class="model-badge rule">规则 / 工作流</b><span class="node-desc">控制回路，任何最终内容均送风险审查。</span></li></ul></article>
+    <article class="agent-card"><header><div class="agent-id">02 / INTAKE</div><h3>意图识别与分流 Agent</h3></header><ul><li><span class="node-name">紧急信号预筛</span><b class="model-badge rule">规则引擎</b><span class="node-desc">命中经审核的紧急词和高风险事件即优先升级。</span></li><li><span class="node-name">意图分类与槽位提取</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">识别科普、预约、术后等意图及项目、时间、症状字段。</span></li><li><span class="node-name">路由映射</span><b class="model-badge rule">规则配置</b><span class="node-desc">按意图和风险标签分发至专业 Agent。</span></li></ul></article>
+    <article class="agent-card"><header><div class="agent-id">03 / KNOWLEDGE</div><h3>知识科普 Agent</h3></header><ul><li><span class="node-name">边界判断与检索问题改写</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">把自然问题拆成项目、流程、恢复期等检索子任务。</span></li><li><span class="node-name">混合检索与资料排序</span><b class="model-badge retrieval">BGE-M3 + Reranker</b><span class="node-desc">从审核知识库召回并排序相关证据。</span></li><li><span class="node-name">证据充分性与冲突检查</span><b class="model-badge text">Qwen3-32B → R1</b><span class="node-desc">Qwen 先核对；高影响或冲突时由 DeepSeek-R1 独立复核。</span></li><li><span class="node-name">科普草稿生成</span><b class="model-badge text">Qwen3-30B-A3B</b><span class="node-desc">用通俗语言说明，保留限制条件和面诊提示。</span></li></ul></article>
+    <article class="agent-card"><header><div class="agent-id">04 / RECOMMENDATION</div><h3>项目推荐 Agent</h3></header><ul><li><span class="node-name">画像授权与候选过滤</span><b class="model-badge rule">权限 / 数据库</b><span class="node-desc">只读经授权信息，过滤下架、预算或门店不符项目。</span></li><li><span class="node-name">需求与预算提取</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">提取明确需求、预算、恢复期和时间偏好。</span></li><li><span class="node-name">推荐组合与理由</span><b class="model-badge text">Qwen3-30B-A3B</b><span class="node-desc">输出可优先了解的方向和仍需确认事项。</span></li><li><span class="node-name">价格与活动校验</span><b class="model-badge rule">业务系统</b><span class="node-desc">价格仅取正式业务记录，模型不得估价。</span></li></ul></article>
+    <article class="agent-card"><header><div class="agent-id">05 / CLINIC INFO</div><h3>资质与门店查询 Agent</h3></header><ul><li><span class="node-name">门店、医生、项目识别</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">将用户口语映射为可查询实体。</span></li><li><span class="node-name">资质、设备与排班查询</span><b class="model-badge rule">机构数据库</b><span class="node-desc">以正式数据源为唯一事实依据。</span></li><li><span class="node-name">查询结果说明</span><b class="model-badge text">Qwen3-30B-A3B</b><span class="node-desc">把已验证数据转换成易读回复。</span></li></ul></article>
+    <article class="agent-card"><header><div class="agent-id">06 / BOOKING</div><h3>预约管理 Agent</h3></header><ul><li><span class="node-name">预约请求解析</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">提取预约、改约或取消所需参数。</span></li><li><span class="node-name">身份、归属和档期校验</span><b class="model-badge rule">预约系统</b><span class="node-desc">校验权限、真实号源、费用规则与操作条件。</span></li><li><span class="node-name">确认与结果文案</span><b class="model-badge text">Qwen3-30B-A3B</b><span class="node-desc">基于真实结果生成待审确认内容。</span></li><li><span class="node-name">幂等执行</span><b class="model-badge rule">业务系统</b><span class="node-desc">仅在用户确认与风险放行后执行。</span></li></ul></article>
+    <article class="agent-card"><header><div class="agent-id">07 / PROFILE &amp; MEMORY</div><h3>客户画像与记忆 Agent</h3></header><ul><li><span class="node-name">授权、脱敏与保留期限</span><b class="model-badge rule">隐私服务</b><span class="node-desc">决定信息能否写入、何时归档或删除。</span></li><li><span class="node-name">偏好与事实抽取</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">从对话中提取明确表达，并保留来源证据。</span></li><li><span class="node-name">长期摘要与冲突标注</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">压缩长对话，标记前后不一致但不替用户裁决。</span></li></ul></article>
+    <article class="agent-card post-card"><header><div class="agent-id">08 / POST-CARE</div><h3>术后护理与随访 Agent</h3></header><ul><li><span class="node-name">症状与时间线结构化</span><b class="model-badge text">Qwen3-8B</b><span class="node-desc">提取项目、术后天数、部位、变化趋势和用户描述。</span></li><li><span class="node-name">图片 OCR 与非诊断性观察</span><b class="model-badge vision">Qwen3-VL-8B</b><span class="node-desc">仅在用户授权上传后使用；不输出诊断或治疗结论。</span></li><li><span class="node-name">护理资料检索与草稿</span><b class="model-badge retrieval">BGE + Qwen3-30B</b><span class="node-desc">检索已审核资料后生成低风险护理建议。</span></li><li><span class="node-name">图文矛盾或风险线索复核</span><b class="model-badge vision">InternVL3.5</b><span class="node-desc">用独立视觉模型交叉复核，只输出需升级线索。</span></li></ul></article>
+    <article class="agent-card risk-card"><header><div class="agent-id">09 / RISK &amp; COMPLIANCE</div><h3>风险审查 Agent</h3></header><ul><li><span class="node-name">权限、敏感操作与硬性阻断</span><b class="model-badge rule">规则 / 业务系统</b><span class="node-desc">身份不符、未确认取消、敏感数据泄露等命中即阻断。</span></li><li><span class="node-name">广告、医疗边界与证据语义审查</span><b class="model-badge text">Qwen3-32B → R1</b><span class="node-desc">高风险或意见冲突时，DeepSeek-R1 独立二次复核。</span></li><li><span class="node-name">图文高风险复核</span><b class="model-badge vision">InternVL3.5</b><span class="node-desc">仅在授权图片存在不确定性或风险线索时交叉复核。</span></li><li><span class="node-name">风险聚合、放行与人工接管</span><b class="model-badge rule">确定性决策表</b><span class="node-desc">输出通过、修订、阻止执行或转人工；模型不作最终裁决。</span></li></ul></article>
+  </div>
+</section>
+<section class="detail-section knowledge-detail" id="knowledge-detail" aria-labelledby="knowledge-detail-title">
+  <div class="detail-header"><div><span class="index">DEEP DIVE 01 / KNOWLEDGE &amp; EDUCATION</span><h2 id="knowledge-detail-title">知识科普 Agent：9 个内部节点</h2><p>以经过审核的知识库作为事实来源，完成“理解问题—检索证据—生成草稿—核对事实”的闭环。</p></div><div class="pathline"><b>主路径</b>接收任务 → 读取上下文 → 解析问题 → 判断是否需澄清 → 检索 → 筛选证据 → 生成 → 核对 → 返回待审草稿</div></div>
+  <section class="diagram-card" id="flow-5" data-graph="5">
+    <div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 06 / KNOWLEDGE PIPELINE</span><h2>知识科普 Agent 细化工作流</h2></div><div class="tools" aria-label="知识科普 Agent 细化工作流图表工具"><button type="button" data-action="minus" aria-label="缩小知识科普 Agent 细化工作流">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大知识科普 Agent 细化工作流">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>知识科普 Agent 只输出带证据的待审草稿；澄清问题、科普正文和修订稿都需要经过最终风险审查。</p></div>
+    <div class="viewport" tabindex="0" role="region" aria-label="知识科普 Agent 细化工作流，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="知识科普 Agent 细化工作流"></div></div>
+    <details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>flowchart TB
+    A["1. 接收任务与边界判断"] --&gt; B{"属于科普范围？"}
+    B --&gt;|否：诊断、异常症状或预约| Route["返回转交建议给总控"]
+    B --&gt;|是| C["2. 读取必要且经授权的上下文"]
+    C --&gt; D["3. 解析问题并拆分检索子任务"]
+    D --&gt; E{"4. 信息是否充分？"}
+    E --&gt;|否，且影响回答| Clarify["生成简短澄清问题 → 风险审查"]
+    E --&gt;|是，或不影响一般科普| F["5. 混合检索审核知识库"]
+    subgraph Evidence["已审核资料与证据处理"]
+      F --&gt; G["按项目、状态、版本过滤"]
+      G --&gt; H["6. 筛选证据与充分性检查"]
+    end
+    H --&gt; I{"证据足以回答？"}
+    I --&gt;|否| Limit["缩小回答范围、说明未知或建议人工"]
+    I --&gt;|是| J["7. 生成科普草稿\n保留条件与不确定性"]
+    Limit --&gt; J
+    J --&gt; K["8. 事实与引用逐项核对"]
+    K --&gt; L{"重要结论均有依据？"}
+    L --&gt;|否| J
+    L --&gt;|是| M["9. 返回结构化待审草稿\n正文、引用、缺口、建议路由"]
+    M --&gt; R["总控聚合 → 风险审查"]
+    R --&gt;|需修改| Revise["按审查意见修订，最多 2 次"]
+    Revise --&gt; K
+    R --&gt;|超限或高风险| Human["人工接管"]
+    classDef task fill:#e9f4f1,stroke:#438b77,color:#174f42;
+    classDef decision fill:#fff6df,stroke:#b88927,color:#704d0a;
+    classDef risk fill:#fff1ed,stroke:#c17768,color:#823f33;
+    class A,C,D,F,G,H,J,K,M task;
+    class B,E,I,L decision;
+    class R,Revise,Human risk;</code></pre></details>
+  </section>
+  <div class="node-detail-grid">
+    <article class="node-detail"><span class="step">01 / INPUT GATE</span><h3>任务接收与边界判断</h3><p>确认问题是否属于原理、流程、恢复期等一般科普；诊断、异常症状或预约操作直接返回转交建议。</p><b class="model-badge text">Qwen3-8B + 路由规则</b></article>
+    <article class="node-detail"><span class="step">02 / CONTEXT</span><h3>上下文读取</h3><p>读取当前问题所需的对话与已授权画像，例如用户正在比较的项目；不为一般科普过度收集信息。</p><b class="model-badge rule">权限 / 记忆服务</b></article>
+    <article class="node-detail"><span class="step">03 / DECOMPOSE</span><h3>问题解析与拆分</h3><p>将口语问题转为结构化检索任务：原理、差异、局限、恢复期及需要面诊确认的事项。</p><b class="model-badge text">Qwen3-8B</b></article>
+    <article class="node-detail"><span class="step">04 / CLARIFY</span><h3>信息充分性判断</h3><p>只有缺失信息会实质影响回答时才追问；一般科普可直接继续。澄清问题也必须送风险审查。</p><b class="model-badge text">Qwen3-8B + 规则</b></article>
+    <article class="node-detail"><span class="step">05 / RETRIEVE</span><h3>知识检索</h3><p>从审核项目资料、护理指南和 FAQ 中混合检索，并按项目、文档状态和版本过滤。</p><b class="model-badge retrieval">BGE-M3 + Reranker</b></article>
+    <article class="node-detail"><span class="step">06 / EVIDENCE</span><h3>证据筛选与充分性检查</h3><p>排除过期、无关、来源不明或冲突资料；高影响或冲突证据升级给 DeepSeek-R1 交叉复核。</p><b class="model-badge text">Qwen3-32B → R1</b></article>
+    <article class="node-detail"><span class="step">07 / DRAFT</span><h3>科普草稿生成</h3><p>基于已选证据进行通俗表达，区分一般知识和个人适用性，保留条件、局限与不确定性。</p><b class="model-badge text">Qwen3-30B-A3B</b></article>
+    <article class="node-detail"><span class="step">08 / VERIFY</span><h3>事实与引用核对</h3><p>检查价格、疗程、效果和恢复期等关键说法是否由正确引用支撑；有争议时由 DeepSeek-R1 复核。</p><b class="model-badge text">Qwen3-32B → R1</b></article>
+    <article class="node-detail"><span class="step">09 / RETURN</span><h3>修订与结构化返回</h3><p>返回正文、引用、未解决问题和建议路由；按审查意见修订后完整复审，超过上限转人工。</p><b class="model-badge text">Qwen3-30B-A3B + 工作流</b></article>
+  </div>
+</section>
+<section class="detail-section risk-detail" id="risk-detail" aria-labelledby="risk-detail-title">
+  <div class="detail-header"><div><span class="index">DEEP DIVE 02 / RISK &amp; COMPLIANCE</span><h2 id="risk-detail-title">风险审查 Agent：10 个内部节点</h2><p>以原始消息、完整草稿、证据、操作参数和业务状态为审查对象，规则优先，模型辅助，人工兜底。</p></div><div class="pathline"><b>主路径</b>接收请求 → 完整性校验 → 紧急风险识别 → 规则与专家审查 → 操作校验（如适用） → 聚合决策 → 放行 / 修订复审 / 人工接管</div></div>
+  <section class="diagram-card" id="flow-6" data-graph="6">
+    <div class="card-head"><div class="heading-line"><div><span class="index">DIAGRAM 07 / RISK CONTROL PIPELINE</span><h2>风险审查 Agent 细化工作流</h2></div><div class="tools" aria-label="风险审查 Agent 细化工作流图表工具"><button type="button" data-action="minus" aria-label="缩小风险审查 Agent 细化工作流">−</button><span class="zoom-label">100%</span><button type="button" data-action="plus" aria-label="放大风险审查 Agent 细化工作流">＋</button><button type="button" data-action="reset">重置</button><button type="button" data-action="svg" disabled>下载 SVG</button></div></div><p>模型可以发现语义风险并提出修改意见；身份、权限、操作执行和最终放行由规则、业务系统与人工机制控制。</p></div>
+    <div class="viewport" tabindex="0" role="region" aria-label="风险审查 Agent 细化工作流，可横向滚动"><div class="render-status" role="status">正在渲染 Mermaid 图表…</div><div class="diagram" aria-label="风险审查 Agent 细化工作流"></div></div>
+    <details><summary>查看 Mermaid 源码</summary><div class="source-tools"><button type="button" data-action="copy">复制源码</button> <button type="button" data-action="mmd">下载 .mmd</button></div><pre><code>flowchart TB
+    A["1. 接收审查请求并标准化\n原始消息、草稿、证据、操作与业务状态"] --&gt; B{"2. 输入完整且具备权限？"}
+    B --&gt;|否| Need["返回补充要求 / 阻止执行"]
+    B --&gt;|是| C{"3. 命中紧急风险信号？"}
+    C --&gt;|是| Emergency["发送已审核风险提示\n创建紧急人工接管"]
+    C --&gt;|否| D["4. 确定性规则检查\n禁发词、敏感数据、前置条件、重复执行"]
+    D --&gt; E{"命中硬性阻断？"}
+    E --&gt;|是| Block["阻止执行并记录规则编号"]
+    E --&gt;|否| F["5. 多专家并行审查\n医疗边界 / 广告表达 / 隐私与服务规则"]
+    F --&gt; X{"高风险或模型意见冲突？"}
+    X --&gt;|是| DS["DeepSeek-R1 独立二次语义复核"]
+    X --&gt;|否| G{"6. 是否为敏感操作？"}
+    DS --&gt; G
+    G --&gt;|是| Biz["业务校验：状态、规则、确认与执行条件"]
+    G --&gt;|否| H["7. 聚合硬规则、专家意见与业务结果"]
+    Biz --&gt; H
+    H --&gt; I{"审查结论"}
+    I --&gt;|通过| Token["10. 签发放行凭据并写入审计记录"]
+    Token --&gt; Output["发送已审查回复 / 执行已审核操作"]
+    I --&gt;|需修改| Feedback["8. 返回具体修改意见并记录复审次数"]
+    Feedback --&gt; Retry{"低于最大复审次数？"}
+    Retry --&gt;|是| Resubmit["修订完整内容后重新提交"]
+    Resubmit --&gt; A
+    Retry --&gt;|否| Handoff["9. 创建人工接管任务并跟踪状态"]
+    I --&gt;|高风险| Handoff
+    classDef base fill:#e9f1ff,stroke:#4771a5,color:#173451;
+    classDef decision fill:#fff6df,stroke:#b88927,color:#704d0a;
+    classDef rule fill:#fff1ed,stroke:#c17768,color:#823f33;
+    classDef human fill:#f2edfa,stroke:#8065a9,color:#49386b;
+    class A,F,H,Token base;
+    class B,C,E,G,I,Retry,X decision;
+    class D,Biz,Need,Block,Feedback rule;
+    class Emergency,Handoff,DS human;</code></pre></details>
+  </section>
+  <div class="node-detail-grid">
+    <article class="node-detail"><span class="step">01 / STANDARDIZE</span><h3>审查请求接收与标准化</h3><p>收集完整待发送回复或操作请求、用户原话、证据、必要上下文和业务状态，并标记内容审查或操作审查。</p><b class="model-badge rule">工作流 / 数据契约</b></article>
+    <article class="node-detail"><span class="step">02 / COMPLETE</span><h3>输入完整性与权限校验</h3><p>确认身份、对象归属、授权范围和审查资料完整性；信息未知不是低风险，缺失即要求补充。</p><b class="model-badge rule">权限 / 业务系统</b></article>
+    <article class="node-detail"><span class="step">03 / EMERGENCY</span><h3>紧急风险优先识别</h3><p>基于原始消息和上下文识别需优先升级的信号，不能只审查草稿；触发后优先走人工接管路径。</p><b class="model-badge rule">规则优先 + Qwen3-8B</b></article>
+    <article class="node-detail"><span class="step">04 / HARD RULES</span><h3>确定性规则检查</h3><p>检查禁发表达、必填提示、敏感数据、操作前置条件和重复执行；规则带编号、版本和命中位置。</p><b class="model-badge rule">规则引擎</b></article>
+    <article class="node-detail"><span class="step">05 / EXPERT REVIEW</span><h3>多专家并行审查</h3><p>Qwen3-32B 完成首次并行审查；高风险或意见冲突时，DeepSeek-R1 进行独立二次复核并返回证据与建议。</p><b class="model-badge text">Qwen3-32B → R1</b></article>
+    <article class="node-detail"><span class="step">06 / OPERATION</span><h3>敏感操作业务校验</h3><p>仅在预约、改约、取消、退费等场景查询真实状态、机构规则、用户确认和执行条件。</p><b class="model-badge rule">预约 / 交易系统</b></article>
+    <article class="node-detail"><span class="step">07 / DECIDE</span><h3>结论聚合与决策</h3><p>阻断项优先于风险分数；输出通过、需修改、转人工或阻止执行。人工不能绕过权限和业务限制。</p><b class="model-badge rule">确定性决策表</b></article>
+    <article class="node-detail"><span class="step">08 / REVISION</span><h3>修订反馈与复审控制</h3><p>指出需删除的承诺、缺少的依据或错误的操作条件；记录修订次数，修订后重新审查完整版本。</p><b class="model-badge text">Qwen3-30B-A3B + 工作流</b></article>
+    <article class="node-detail"><span class="step">09 / HUMAN LOOP</span><h3>人工接管与状态管理</h3><p>创建接管任务并附上摘要、风险原因和报告；只有人工实际接收后，才可告知用户人工已接入。</p><b class="model-badge rule">工单 / 状态机</b></article>
+    <article class="node-detail"><span class="step">10 / RELEASE</span><h3>放行凭据与审计记录</h3><p>为已通过的特定文本或操作签发凭据，记录版本、结论和时间；内容或参数变化必须重新审查。</p><b class="model-badge rule">签名 / 审计服务</b></article>
+  </div>
+</section>
+<section class="tuning-section" id="fine-tuning" aria-labelledby="fine-tuning-title">
+  <div class="section-intro"><span class="index">ADAPTATION PLAN / EVALUATE BEFORE TRAINING</span><h2 id="fine-tuning-title">开源模型微调策略：优先 LoRA，不做第一阶段全量微调</h2><p>微调用于稳定任务格式、服务表达和审查标签，不用于写入项目疗效、价格、医生资质或医疗规则；这些事实仍由审核知识库、业务系统和规则引擎维护。</p></div>
+  <div class="tuning-stance"><article class="stance-card good"><b>第一阶段：冻结主模型，先建立评测集</b><p>先以经专家审核的真实对话、风险案例和检索命中数据验证基础能力；未达到目标时才引入可回滚的 LoRA 适配器。</p></article><article class="stance-card caution"><b>不建议第一阶段全量微调</b><p>全量微调成本高、回滚困难，可能损失通用能力并削弱模型家族之间的独立性。只有 LoRA 明确无法达到指标时才单独立项评估。</p></article></div>
+  <div class="tuning-grid">
+    <article class="tuning-card"><span class="index">ROUTING / EXTRACTION</span><h3>Qwen3-8B</h3><span class="model-badge text">优先微调</span><p class="tuning-method">监督微调 SFT + LoRA</p><p>训练意图分类、槽位抽取、结构化 JSON、问题改写和对话摘要。数据应包含用户输入、标注结果、字段证据和正确路由。</p><p>建议仅训练注意力与部分 MLP 适配器；先观察 JSON 正确率、漏路由率和紧急信号召回率。</p></article>
+    <article class="tuning-card"><span class="index">USER-FACING DRAFTS</span><h3>Qwen3-30B-A3B</h3><span class="model-badge text">后续微调</span><p class="tuning-method">SFT + QLoRA</p><p>第一版先依赖 RAG 与提示词。稳定后再训练机构服务口吻、回复结构、免责声明位置和转人工表达。</p><p>训练数据不得把医学事实、价格或项目承诺固化进权重；这些内容必须继续从实时受控来源读取。</p></article>
+    <article class="tuning-card"><span class="index">FIRST-PASS REVIEW</span><h3>Qwen3-32B</h3><span class="model-badge text">后续微调</span><p class="tuning-method">多标签 SFT + LoRA</p><p>训练广告合规、医疗边界、证据不足、隐私和服务承诺等风险标签，并要求输出命中原文、规则编号和修改建议。</p><p>不训练“是否放行”的最终裁决；裁决保留给确定性决策表。</p></article>
+    <article class="tuning-card"><span class="index">VISUAL TRIAGE</span><h3>Qwen3-VL-8B</h3><span class="model-badge vision">谨慎微调</span><p class="tuning-method">视觉投影层 / 语言层 LoRA</p><p>只在已获得授权、脱敏并由专业人员标注的图文样本充足时，训练 OCR、图片质量与非诊断性结构化观察。</p><p>不训练“疾病诊断”或“项目适配”标签；图像异常仅触发风险审查和人工升级。</p></article>
+    <article class="tuning-card"><span class="index">RETRIEVAL QUALITY</span><h3>BGE-M3 与 Reranker</h3><span class="model-badge retrieval">按需微调</span><p class="tuning-method">对比学习 / 成对排序 + LoRA</p><p>以“问题—正确资料—困难负例”训练检索，以“问题—候选资料—相关性标签”训练重排序，提升项目术语和机构文档的命中率。</p><p>优先评估召回率、引用正确率和过期资料误命中率，再决定是否训练。</p></article>
+    <article class="tuning-card freeze"><span class="index">INDEPENDENT REVIEW</span><h3>DeepSeek-R1 与 InternVL3.5</h3><span class="model-badge vision">第一阶段冻结</span><p class="tuning-method">提示词、规则与评测驱动</p><p>它们承担与 Qwen 不同家族的交叉复核。第一阶段不微调，避免被同一机构训练集拉回相似偏差。</p><p>若未来确需适配，只考虑极小 LoRA 用于结构化输出；必须保留未微调基线用于持续对照。</p></article>
+  </div>
+</section></main>
+<footer>图表使用本地 Mermaid 10.9.3 渲染。分享 HTML 时请同时保留同目录的 mermaid.min.js；独立源码可用于其他支持 Mermaid 的编辑器。此页面为架构说明，未连接实际预约、知识库或客服系统。</footer>
+<div id="feedback" role="status" aria-live="polite"></div>
+<script src="./mermaid.min.js"></script>
+<script>
+const cards = [...document.querySelectorAll('.diagram-card')];
+let feedbackTimer;
+function notify(text){document.querySelector('#feedback').textContent=text;clearTimeout(feedbackTimer);feedbackTimer=setTimeout(()=>document.querySelector('#feedback').textContent='',4000);}
+function download(content,type,name){const url=URL.createObjectURL(new Blob([content],{type}));const link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+cards.forEach(card=>{
+  let zoom=100;
+  card.addEventListener('click',async event=>{
+    const button=event.target.closest('button[data-action]');if(!button||button.disabled)return;
+    const action=button.dataset.action,diagram=card.querySelector('.diagram'),source=card.querySelector('code').textContent;
+    if(['plus','minus','reset'].includes(action)){zoom=action==='reset'?100:Math.max(50,Math.min(200,zoom+(action==='plus'?25:-25)));diagram.style.width=zoom+'%';diagram.style.minWidth=(1000*zoom/100)+'px';card.querySelector('.zoom-label').textContent=zoom+'%';card.querySelector('[data-action="minus"]').disabled=zoom===50;card.querySelector('[data-action="plus"]').disabled=zoom===200;}
+    if(action==='copy'){try{await navigator.clipboard.writeText(source);notify('Mermaid 源码已复制');}catch{card.querySelector('details').open=true;const range=document.createRange();range.selectNodeContents(card.querySelector('code'));const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);notify('源码已选中，请按 Ctrl+C 或下载 .mmd 文件');}}
+    if(action==='mmd')download(source,'text/plain;charset=utf-8','zhimei-flow-'+card.dataset.graph+'.mmd');
+    if(action==='svg'){const svg=diagram.querySelector('svg').cloneNode(true);svg.setAttribute('xmlns','http://www.w3.org/2000/svg');const box=svg.getAttribute('viewBox').split(/\s+/);svg.setAttribute('width',box[2]);svg.setAttribute('height',box[3]);download(new XMLSerializer().serializeToString(svg),'image/svg+xml;charset=utf-8','zhimei-flow-'+card.dataset.graph+'.svg');}
+  });
+});
+async function render(){
+  if(!window.mermaid){cards.forEach(card=>{card.querySelector('.render-status').textContent='渲染库未加载：请将 mermaid.min.js 放在 HTML 同一目录，再刷新。仍可查看或下载下方源码。';card.querySelector('details').open=true;});return;}
+  mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'base',fontFamily:'Microsoft YaHei, PingFang SC, sans-serif',themeVariables:{primaryColor:'#edf4fa',primaryTextColor:'#19344a',primaryBorderColor:'#7396b0',lineColor:'#678294',secondaryColor:'#eaf5f1',tertiaryColor:'#f6f8fb',actorBkg:'#edf4fa',actorBorder:'#7396b0',actorTextColor:'#19344a',signalColor:'#345268',signalTextColor:'#19344a',noteBkgColor:'#fff6df',noteTextColor:'#704d0a',noteBorderColor:'#c6a250',fontSize:'15px'},flowchart:{htmlLabels:false,curve:'basis',nodeSpacing:28,rankSpacing:45},sequence:{useMaxWidth:false,wrap:true,diagramMarginX:24,actorMargin:30,messageMargin:38}});
+  for(const [index,card] of cards.entries()){
+    try{const {svg}=await mermaid.render('mermaid-flow-'+index,card.querySelector('code').textContent);card.querySelector('.diagram').innerHTML=svg;card.querySelector('.render-status').remove();card.querySelector('[data-action="svg"]').disabled=false;}
+    catch(error){card.querySelector('.render-status').textContent='此图渲染失败，请使用下方 Mermaid 源码查看。';card.querySelector('details').open=true;console.error(error);}
+  }
+}
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据模型：PostgreSQL 表清单（本项目专用 v0.1） · 智美医美顾问设计文档</title>
+<style>
+:root{--ink:#19344a;--muted:#586d7b;--line:#d7e1e7;--accent:#226b62;--bg:#f3f6f8;--code:#f7f9fb}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif}
+a{color:#1f6f8b}
+.topbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;padding:12px 28px;background:#fff;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;line-height:1.3}
+.brand .eyebrow{font:11px/1.4 Consolas,monospace;color:var(--accent);letter-spacing:1.5px}
+.brand b{font-size:15px}
+.topbar nav{display:flex;flex-wrap:wrap;gap:6px}
+.topbar nav a{border:1px solid var(--line);border-radius:6px;padding:5px 11px;font-size:13px;text-decoration:none;color:var(--ink);background:#fff}
+.topbar nav a:hover{background:#e8f2f0;border-color:#75a69a}
+.topbar nav a.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.layout{display:grid;grid-template-columns:272px minmax(0,1fr);gap:26px;max-width:1560px;margin:0 auto;padding:26px 28px 60px}
+.toc{position:sticky;top:74px;align-self:start;max-height:calc(100vh - 96px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 14px}
+.toc b{display:block;font-size:12px;color:var(--muted);letter-spacing:1px;margin-bottom:8px}
+.toc ul{list-style:none;margin:0;padding:0}
+.toc li{margin:3px 0;font-size:13px;line-height:1.5}
+.toc li.l3{padding-left:14px;font-size:12.5px}
+.toc a{color:var(--muted);text-decoration:none;display:block;padding:2px 0}
+.toc a:hover{color:var(--accent)}
+.doc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:30px 38px 44px;min-width:0}
+.doc h1{font-size:29px;letter-spacing:-.5px;margin:0 0 10px;line-height:1.35}
+.doc h2{font-size:22px;margin:36px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+.doc h2:first-of-type{border-top:0;padding-top:0}
+.doc h3{font-size:17px;margin:26px 0 8px}
+.doc h4{font-size:15px;margin:20px 0 6px;color:#2c4a5e}
+.doc p{margin:9px 0}
+.doc ul,.doc ol{margin:9px 0;padding-left:24px}
+.doc li{margin:4px 0}
+.doc code{font-family:Consolas,"Courier New",monospace;font-size:12.5px;background:#eef2f5;padding:1px 5px;border-radius:4px;color:#2c4f6b}
+.doc pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow:auto;margin:12px 0}
+.doc pre code{background:none;padding:0;font-size:12.5px;line-height:1.7;color:#243b4a;white-space:pre}
+.doc blockquote{margin:12px 0;padding:12px 16px;background:#e8f2f0;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;color:#315a58}
+.doc blockquote p{margin:5px 0}
+.doc blockquote ol,.doc blockquote ul{padding-left:20px}
+.doc hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+.tw{overflow:auto;border:1px solid var(--line);border-radius:10px;margin:14px 0}
+.doc table{width:100%;border-collapse:collapse;font-size:13px}
+.doc th,.doc td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+.doc th{background:#f3f6f8;font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+.doc td code{font-size:12px;white-space:normal;word-break:break-word}
+footer{max-width:1560px;margin:0 auto;padding:0 28px 44px;color:var(--muted);font-size:12px}
+@media(max-width:1080px){.layout{grid-template-columns:1fr}.toc{position:static;max-height:none}.doc{padding:22px 20px 32px}}
+@media print{.topbar,.toc{display:none}.layout{display:block;padding:0}.doc{border:0;padding:0}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="eyebrow">ZHIMEI / DESIGN DOCS</span><b>智美医美顾问 · 设计文档</b></div><nav><a href="langgraph-v1.html">架构总览</a><a href="arch-pseudocode.html">伪代码讲解</a><a href="arch-supervisor.html">总控与意图</a><a href="config-rules.html">规则与参数</a><a href="data-model.html" class="active">数据模型</a><a href="ops-console.html">运营后台</a></nav></header>
+<div class="layout"><aside class="toc"><b>本页目录</b><ul><li class="l2"><a href="#1-用户与授权">1. 用户与授权</a></li><li class="l2"><a href="#2-会话与消息">2. 会话与消息</a></li><li class="l2"><a href="#3-图运行与审计">3. 图运行与审计</a></li><li class="l2"><a href="#4-业务域mvp-用本地表模拟">4. 业务域（MVP 用本地表模拟）</a></li><li class="l2"><a href="#5-操作执行外部副作用的唯一防线">5. 操作执行（外部副作用的唯一防线）</a></li><li class="l2"><a href="#6-知识库治理向量在-milvus元数据在-pg">6. 知识库治理（向量在 Milvus，元数据在 PG）</a></li><li class="l2"><a href="#7-画像与记忆">7. 画像与记忆</a></li><li class="l2"><a href="#8-规则资产不允许硬编码">8. 规则资产（不允许硬编码）</a></li><li class="l2"><a href="#9-人工接管与运营详细设计见-ops-consolemd">9. 人工接管与运营（详细设计见 <code>ops-console.md</code>）</a></li><li class="l2"><a href="#10-可观测与出站">10. 可观测与出站</a></li><li class="l2"><a href="#11-langgraph-checkpoint-表不要手改">11. LangGraph checkpoint 表（不要手改）</a></li><li class="l2"><a href="#12-与图节点的对应关系">12. 与图/节点的对应关系</a></li><li class="l2"><a href="#13-mvp-阶段可以偷懒的地方但要留痕">13. MVP 阶段可以偷懒的地方（但要留痕）</a></li><li class="l2"><a href="#14-几条必须写进-ddl-的约束别只写在代码里">14. 几条必须写进 DDL 的约束（别只写在代码里）</a></li></ul></aside><main class="doc"><h1 id="数据模型postgresql-表清单本项目专用-v01">数据模型：PostgreSQL 表清单（本项目专用 v0.1）</h1>
+<blockquote><p>这份清单<strong>替代</strong>早期草稿。已剔除与另一项目相关的表（如"试卷"）。<br>三个 schema 分开，不要混：</p>
+<div class="tw"><table><thead><tr><th>schema</th><th>归属</th><th>说明</th></tr></thead><tbody><tr><td><code>app</code></td><td>本项目业务表</td><td>全部由应用维护</td></tr><tr><td><code>lg</code></td><td>LangGraph</td><td>checkpoint 由 <code>AsyncPostgresSaver.setup()</code> 自动建表，<strong>不要手改</strong></td></tr><tr><td><code>ops</code></td><td>运营后台</td><td>工单、坐席、处置日志</td></tr></tbody></table></div>
+<p>通用约定：主键用 <code>BIGSERIAL</code> 或 UUID（对外可见的用 UUID，避免暴露量级）；<br>时间统一 <code>TIMESTAMPTZ</code>；需要"软删"的表带 <code>is_deleted BOOLEAN</code>；<br>JSON 字段用 <code>JSONB</code> 并加 GIN 索引（只在真的要查的字段上加）。</p></blockquote>
+<hr>
+<h2 id="1-用户与授权">1. 用户与授权</h2>
+<pre><code class="lang-sql">-- 用户主表
+CREATE TABLE app.app_user (
+  user_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  display_name  TEXT,
+  gender        SMALLINT,                       -- 0未知 1男 2女
+  birth_year    SMALLINT,
+  status        TEXT NOT NULL DEFAULT 'active', -- active | blocked
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 身份标识（一个用户可有多个渠道身份）
+CREATE TABLE app.user_identity (
+  identity_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES app.app_user(user_id),
+  channel       TEXT NOT NULL,                  -- wechat | app | web | phone
+  external_id   TEXT NOT NULL,                  -- openid / 手机号哈希 / 设备号
+  verified      BOOLEAN NOT NULL DEFAULT false,
+  bound_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (channel, external_id)
+);
+
+-- 授权记录：数据能不能用，靠这张表说话（不是靠模型判断）
+CREATE TABLE app.user_consent (
+  consent_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES app.app_user(user_id),
+  scope         TEXT NOT NULL,                  -- profile | photo | medical_record | marketing
+  purpose       TEXT NOT NULL,                  -- service | analytics
+  granted       BOOLEAN NOT NULL,
+  granted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at    TIMESTAMPTZ,
+  expires_at    TIMESTAMPTZ,                    -- 保留期限
+  evidence      JSONB NOT NULL DEFAULT '{}'     -- 授权凭证（截图 id / 勾选记录）
+);
+
+-- 附件（术后照片等）：MVP 只入库不解析
+CREATE TABLE app.user_attachment (
+  file_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID NOT NULL REFERENCES app.app_user(user_id),
+  session_id    UUID,
+  storage_key   TEXT NOT NULL,                  -- 对象存储 key
+  mime          TEXT NOT NULL,
+  bytes         BIGINT NOT NULL,
+  sha256        TEXT NOT NULL,
+  consent_id    UUID REFERENCES app.user_consent(consent_id),  -- 必须有授权
+  parsed        BOOLEAN NOT NULL DEFAULT false,  -- ★ MVP 恒为 false（未接视觉模型）
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="2-会话与消息">2. 会话与消息</h2>
+<pre><code class="lang-sql">CREATE TABLE app.chat_session (
+  session_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID REFERENCES app.app_user(user_id),
+  channel       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL UNIQUE,           -- ★ LangGraph 的 thread_id，直接用 session_id 亦可
+  ai_enabled    BOOLEAN NOT NULL DEFAULT true,  -- ★ 人工接管后置 false，AI 不再自动回复
+  emergency     BOOLEAN NOT NULL DEFAULT false,
+  status        TEXT NOT NULL DEFAULT 'active', -- active | handoff | closed
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_active_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  closed_at     TIMESTAMPTZ
+);
+
+CREATE TABLE app.chat_message (
+  message_id    BIGSERIAL PRIMARY KEY,
+  session_id    UUID NOT NULL REFERENCES app.chat_session(session_id),
+  turn_id       UUID,                           -- 对应图 state 的 turn_id
+  role          TEXT NOT NULL,                  -- user | assistant | agent(人工) | system
+  content       TEXT NOT NULL,
+  content_hash  TEXT,                           -- ★ 出站内容哈希，与 release_token 对得上
+  release_token TEXT,                           -- AI 出站才有；人工回复为 NULL
+  risk_level    TEXT,
+  review_kind   TEXT,                           -- content | operation | result_reply | emergency
+  meta          JSONB NOT NULL DEFAULT '{}',    -- 意图、槽位、命中规则等
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON app.chat_message (session_id, created_at DESC);
+
+-- 长会话压缩摘要（给"最近 5 轮"之外的历史用）
+CREATE TABLE app.chat_turn_summary (
+  summary_id    BIGSERIAL PRIMARY KEY,
+  session_id    UUID NOT NULL REFERENCES app.chat_session(session_id),
+  from_message  BIGINT NOT NULL,
+  to_message    BIGINT NOT NULL,
+  summary       TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="3-图运行与审计">3. 图运行与审计</h2>
+<pre><code class="lang-sql">-- 每次用户消息触发的一次图运行
+CREATE TABLE app.graph_run (
+  run_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id     TEXT NOT NULL,
+  session_id    UUID NOT NULL,
+  turn_id       UUID NOT NULL,
+  status        TEXT NOT NULL,                  -- running | done | interrupted | error
+  interrupted_at TEXT,                          -- 挂起在哪个节点（await_confirm 等）
+  error         TEXT,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ
+);
+CREATE INDEX ON app.graph_run (thread_id, started_at DESC);
+
+-- ★ 审查审计：每一次审查结论都要能回溯到规则版本
+CREATE TABLE app.review_audit (
+  audit_id      BIGSERIAL PRIMARY KEY,
+  thread_id     TEXT NOT NULL,
+  session_id    UUID NOT NULL,
+  review_round  INT  NOT NULL,
+  review_kind   TEXT NOT NULL,
+  verdict       TEXT NOT NULL,                  -- pass | revise | need_info | block | human
+  risk_level    TEXT NOT NULL,
+  content_hash  TEXT NOT NULL,
+  panel_reviews JSONB NOT NULL DEFAULT '[]',    -- 三份专家意见（含 confidence / abstain）
+  escalation_used        BOOLEAN NOT NULL DEFAULT false,
+  escalation_independent BOOLEAN,               -- ★ MVP 为 false（同族复核），必须如实记录
+  model_versions JSONB NOT NULL DEFAULT '{}',   -- 各角色实际使用的模型与提示词版本
+  token_id      TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON app.review_audit (thread_id, created_at DESC);
+
+-- 硬规则命中明细（一行一条，便于统计 Top 规则）
+CREATE TABLE app.hard_rule_hit (
+  hit_id        BIGSERIAL PRIMARY KEY,
+  audit_id      BIGINT REFERENCES app.review_audit(audit_id),
+  rule_id       TEXT NOT NULL,                  -- AD-001 ...
+  rule_version  TEXT NOT NULL,
+  severity      TEXT NOT NULL,
+  action        TEXT NOT NULL,                  -- revise | block
+  span          TEXT NOT NULL,                  -- 命中的原文片段
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON app.hard_rule_hit (rule_id, created_at DESC);
+
+-- 放行凭据
+CREATE TABLE app.release_token (
+  token_id      TEXT PRIMARY KEY,
+  content_hash  TEXT NOT NULL,
+  plan_hash     TEXT,
+  review_kind   TEXT NOT NULL,
+  session_id    UUID NOT NULL,
+  issued_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+  revoked_at    TIMESTAMPTZ,
+  used_at       TIMESTAMPTZ                     -- 出站使用时间（一次性凭据）
+);</code></pre>
+<hr>
+<h2 id="4-业务域mvp-用本地表模拟">4. 业务域（MVP 用本地表模拟）</h2>
+<blockquote><p>⚠️ <strong>上线前必须替换</strong>：真实环境里这些属于机构业务系统（预约系统 / 机构数据库）。<br>MVP 阶段用本地表模拟，是为了让演示能跑通；<strong>不要</strong>在上面长业务逻辑，<br>保持"仓储接口 + 本地实现"的形态，将来换成 HTTP 客户端即可。</p></blockquote>
+<pre><code class="lang-sql">CREATE TABLE app.store (
+  store_id   TEXT PRIMARY KEY, name TEXT NOT NULL, city TEXT, address TEXT,
+  phone      TEXT, status TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE TABLE app.doctor (
+  doctor_id  TEXT PRIMARY KEY, name TEXT NOT NULL, title TEXT,
+  store_id   TEXT REFERENCES app.store(store_id), status TEXT NOT NULL DEFAULT 'active'
+);
+
+-- 资质：查询类 Agent 的唯一事实来源（模型不得编造）
+CREATE TABLE app.doctor_credential (
+  credential_id TEXT PRIMARY KEY,
+  doctor_id     TEXT NOT NULL REFERENCES app.doctor(doctor_id),
+  kind          TEXT NOT NULL,                  -- 执业医师资格 | 主诊医师 | 专项培训
+  cert_no       TEXT NOT NULL,
+  issued_by     TEXT,
+  valid_from    DATE, valid_to DATE,
+  status        TEXT NOT NULL DEFAULT 'valid'   -- valid | expired | revoked
+);
+
+CREATE TABLE app.project (
+  project_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT,
+  status     TEXT NOT NULL DEFAULT 'active'     -- active | offline（下架不得推荐）
+);
+
+-- 价格：只能取正式记录，模型不得估价
+CREATE TABLE app.project_price (
+  price_id   BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES app.project(project_id),
+  store_id   TEXT REFERENCES app.store(store_id),
+  price_cents INT NOT NULL,
+  currency   TEXT NOT NULL DEFAULT 'CNY',
+  effective_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+  effective_to   TIMESTAMPTZ,
+  source     TEXT NOT NULL                      -- 来源标识，审计用
+);
+
+CREATE TABLE app.schedule_slot (
+  slot_id    BIGSERIAL PRIMARY KEY,
+  doctor_id  TEXT NOT NULL REFERENCES app.doctor(doctor_id),
+  store_id   TEXT NOT NULL REFERENCES app.store(store_id),
+  start_at   TIMESTAMPTZ NOT NULL,
+  end_at     TIMESTAMPTZ NOT NULL,
+  capacity   INT NOT NULL DEFAULT 1,
+  booked     INT NOT NULL DEFAULT 0,
+  status     TEXT NOT NULL DEFAULT 'open'       -- open | closed
+);
+
+CREATE TABLE app.appointment (
+  appointment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        UUID NOT NULL REFERENCES app.app_user(user_id),
+  slot_id        BIGINT NOT NULL REFERENCES app.schedule_slot(slot_id),
+  project_id     TEXT NOT NULL REFERENCES app.project(project_id),
+  status         TEXT NOT NULL,                 -- booked | changed | cancelled | done | no_show
+  fee_cents      INT NOT NULL DEFAULT 0,
+  version        INT NOT NULL DEFAULT 1,        -- ★ 乐观锁：并发改约靠它
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 状态变更流水：可追溯、可对账
+CREATE TABLE app.appointment_event (
+  event_id       BIGSERIAL PRIMARY KEY,
+  appointment_id UUID NOT NULL REFERENCES app.appointment(appointment_id),
+  from_status    TEXT, to_status TEXT NOT NULL,
+  reason         TEXT,
+  operator       TEXT NOT NULL,                 -- ai | agent:&lt;id&gt;
+  idempotency_key TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="5-操作执行外部副作用的唯一防线">5. 操作执行（外部副作用的唯一防线）</h2>
+<pre><code class="lang-sql">CREATE TABLE app.op_execution (
+  idempotency_key TEXT PRIMARY KEY,             -- f"{thread_id}:{plan_hash}"
+  session_id      UUID NOT NULL,
+  action          TEXT NOT NULL,                -- change_appointment | cancel_appointment ...
+  params          JSONB NOT NULL,
+  status          TEXT NOT NULL,                -- pending | success | failed
+  result          JSONB,
+  error           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 用户确认记录：证明"执行前确实确认过，且确认的是这一版方案"
+CREATE TABLE app.op_confirmation (
+  confirm_id   BIGSERIAL PRIMARY KEY,
+  session_id   UUID NOT NULL,
+  plan_hash    TEXT NOT NULL,
+  confirmed    BOOLEAN NOT NULL,
+  raw_reply    TEXT,                            -- 用户原话
+  confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="6-知识库治理向量在-milvus元数据在-pg">6. 知识库治理（向量在 Milvus，元数据在 PG）</h2>
+<pre><code class="lang-sql">CREATE TABLE app.kb_document (
+  doc_id       TEXT PRIMARY KEY,
+  title        TEXT NOT NULL,
+  project_id   TEXT,                            -- 归属项目
+  doc_type     TEXT NOT NULL,                   -- 项目资料 | 护理指南 | FAQ | 风险提示
+  status       TEXT NOT NULL DEFAULT 'draft',   -- draft | approved | offline
+  version      TEXT NOT NULL,                   -- ★ 检索必须按版本过滤
+  source       TEXT NOT NULL,                   -- 来源（可追溯）
+  reviewed_by  TEXT, reviewed_at TIMESTAMPTZ,
+  effective_at TIMESTAMPTZ, expire_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE app.kb_chunk (
+  chunk_id     BIGSERIAL PRIMARY KEY,
+  doc_id       TEXT NOT NULL REFERENCES app.kb_document(doc_id),
+  seq          INT NOT NULL,
+  text         TEXT NOT NULL,
+  token_count  INT,
+  milvus_pk    BIGINT,                          -- 对应 Milvus 主键
+  UNIQUE (doc_id, seq)
+);
+
+-- 向量版本映射：换嵌入模型时要能重灌，而不是把旧向量当新的用
+CREATE TABLE app.kb_chunk_vector (
+  chunk_id     BIGINT NOT NULL REFERENCES app.kb_chunk(chunk_id),
+  embed_model  TEXT NOT NULL,                   -- BAAI/bge-m3
+  embed_version TEXT NOT NULL,                  -- 与 milvus collection 一一对应
+  milvus_pk    BIGINT NOT NULL,
+  indexed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (chunk_id, embed_version)
+);
+
+CREATE TABLE app.kb_review_log (
+  log_id     BIGSERIAL PRIMARY KEY,
+  doc_id     TEXT NOT NULL,
+  action     TEXT NOT NULL,                     -- submit | approve | reject | offline
+  actor      TEXT NOT NULL,
+  comment    TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="7-画像与记忆">7. 画像与记忆</h2>
+<pre><code class="lang-sql">CREATE TABLE app.user_profile (
+  user_id         UUID PRIMARY KEY REFERENCES app.app_user(user_id),
+  summary         TEXT,                          -- 长期摘要（转人工时随工单携带）
+  preferences     JSONB NOT NULL DEFAULT '{}',   -- {项目偏好, 时间偏好, 门店偏好}
+  contraindications JSONB NOT NULL DEFAULT '[]', -- ★ 只记录"用户自述"，不推断、不诊断
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 事实抽取：每条都要有来源证据，冲突只标注不裁决
+CREATE TABLE app.user_fact (
+  fact_id      BIGSERIAL PRIMARY KEY,
+  user_id      UUID NOT NULL REFERENCES app.app_user(user_id),
+  fact_key     TEXT NOT NULL,                    -- budget_range | preferred_store | postop_day ...
+  fact_value   TEXT NOT NULL,
+  source_message BIGINT REFERENCES app.chat_message(message_id),
+  confidence   NUMERIC(3,2),
+  conflict_with BIGINT REFERENCES app.user_fact(fact_id),  -- ★ 冲突标注，不覆盖
+  expires_at   TIMESTAMPTZ,                      -- 保留期限
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="8-规则资产不允许硬编码">8. 规则资产（不允许硬编码）</h2>
+<pre><code class="lang-sql">CREATE TABLE app.rule_registry (
+  rule_id      TEXT NOT NULL,                    -- AD-001
+  version      TEXT NOT NULL,                    -- v1.0
+  category     TEXT NOT NULL,                    -- ad | medical | privacy | ops | legal
+  severity     TEXT NOT NULL,                    -- high | medium | low
+  action       TEXT NOT NULL,                    -- revise | block
+  title        TEXT NOT NULL,
+  spec         JSONB NOT NULL,                   -- 判定细节（正则 / 说明 / 依据）
+  effective_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retired_at   TIMESTAMPTZ,
+  updated_by   TEXT NOT NULL,
+  PRIMARY KEY (rule_id, version)
+);
+
+CREATE TABLE app.emergency_lexicon (
+  term_id      BIGSERIAL PRIMARY KEY,
+  tier         TEXT NOT NULL,                    -- P0 | P1 | P2
+  cluster      TEXT NOT NULL,                    -- vision | respiratory | necrosis | ...
+  term         TEXT NOT NULL,
+  match_type   TEXT NOT NULL DEFAULT 'phrase',   -- phrase | regex | cooccur
+  cooccur_with JSONB NOT NULL DEFAULT '[]',      -- 共现要求
+  negation_sensitive BOOLEAN NOT NULL DEFAULT true,
+  version      TEXT NOT NULL,
+  enabled      BOOLEAN NOT NULL DEFAULT true,
+  UNIQUE (term, tier, version)
+);
+
+CREATE TABLE app.risk_tag_dict (
+  tag          TEXT PRIMARY KEY,                 -- complication_signal ...
+  level        TEXT NOT NULL,                    -- HIGH | MEDIUM | LOW
+  description  TEXT NOT NULL,
+  action_hint  TEXT NOT NULL
+);</code></pre>
+<hr>
+<h2 id="9-人工接管与运营详细设计见-ops-consolemd">9. 人工接管与运营（详细设计见 <code>ops-console.md</code>）</h2>
+<pre><code class="lang-sql">CREATE TABLE ops.handoff_ticket (
+  ticket_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id    UUID NOT NULL,
+  thread_id     TEXT NOT NULL,
+  user_id       UUID,
+  reason        TEXT NOT NULL,                   -- risk_high | emergency | revision_exhausted | need_info | clarify_exhausted
+  priority      TEXT NOT NULL,                   -- P0 | P1 | P2
+  status        TEXT NOT NULL DEFAULT 'open',    -- open | accepted | in_progress | closed | escalated
+  profile_summary TEXT,
+  last_turns    JSONB NOT NULL DEFAULT '[]',     -- 最近 5 轮
+  risk_report   JSONB NOT NULL DEFAULT '{}',     -- 命中规则 + 专家意见 + 证据
+  assigned_to   UUID,                            -- ops.agent_user
+  accepted_at   TIMESTAMPTZ,                     -- ★ 只有非空后才能告知用户"人工已接入"
+  closed_at     TIMESTAMPTZ, close_reason TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON ops.handoff_ticket (status, priority, created_at);
+
+CREATE TABLE ops.handoff_event (
+  event_id   BIGSERIAL PRIMARY KEY,
+  ticket_id  UUID NOT NULL REFERENCES ops.handoff_ticket(ticket_id),
+  action     TEXT NOT NULL,                      -- create | accept | reply | escalate | close | reopen | mark_misreport
+  actor      TEXT NOT NULL,                      -- agent:&lt;id&gt; | system
+  payload    JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ops.agent_user (
+  agent_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL,
+  role       TEXT NOT NULL,                      -- service | doctor | compliance | admin
+  on_duty    BOOLEAN NOT NULL DEFAULT false,
+  status     TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE TABLE ops.agent_action_log (
+  log_id     BIGSERIAL PRIMARY KEY,
+  agent_id   UUID NOT NULL REFERENCES ops.agent_user(agent_id),
+  ticket_id  UUID,
+  action     TEXT NOT NULL,
+  detail     JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 误报回流：紧急词表优化的唯一数据来源
+CREATE TABLE ops.misreport_feedback (
+  feedback_id BIGSERIAL PRIMARY KEY,
+  ticket_id   UUID REFERENCES ops.handoff_ticket(ticket_id),
+  source      TEXT NOT NULL,                     -- emergency | hard_rule | risk_tag
+  ref_id      TEXT NOT NULL,                     -- 命中的 term / rule_id / tag
+  raw_message TEXT NOT NULL,
+  verdict     TEXT NOT NULL,                     -- true_positive | false_positive
+  note        TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="10-可观测与出站">10. 可观测与出站</h2>
+<pre><code class="lang-sql">CREATE TABLE app.llm_call_log (
+  call_id      BIGSERIAL PRIMARY KEY,
+  thread_id    TEXT,
+  role         TEXT NOT NULL,                    -- classify | kb_draft | review_medical ...
+  model        TEXT NOT NULL,
+  prompt_version TEXT,
+  latency_ms   INT,
+  prompt_tokens INT, completion_tokens INT,
+  ok           BOOLEAN NOT NULL,
+  error        TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON app.llm_call_log (role, created_at DESC);
+
+-- 出站消息（发送失败可重投；也是"是否真的发出去了"的证据）
+CREATE TABLE app.outbox_message (
+  outbox_id  BIGSERIAL PRIMARY KEY,
+  session_id UUID NOT NULL,
+  token_id   TEXT REFERENCES app.release_token(token_id),
+  payload    JSONB NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending',    -- pending | sent | failed
+  attempts   INT NOT NULL DEFAULT 0,
+  sent_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);</code></pre>
+<hr>
+<h2 id="11-langgraph-checkpoint-表不要手改">11. LangGraph checkpoint 表（不要手改）</h2>
+<pre><code class="lang-sql">-- schema: lg —— 由 checkpointer.setup() 自动创建，属于框架内部结构
+--   lg.checkpoints           图状态快照
+--   lg.checkpoint_blobs      大字段（state 序列化内容）
+--   lg.checkpoint_writes     待写入（并发写恢复用）
+--
+-- 运维要点：
+--   1) 这些表会随会话数持续增长 —— 必须配定期归档策略（见下）
+--   2) thread_id 与 app.chat_session.thread_id 对应
+--   3) 不要自己写 SQL 改这些表；要清理用框架之外的归档脚本</code></pre>
+<p><strong>归档策略</strong>（MVP 就要有，否则演示环境很快膨胀）：</p>
+<pre><code class="lang-sql">-- 会话空闲超过 SESSION_IDLE 且已 closed 的 thread，其 checkpoint 归档后删除
+DELETE FROM lg.checkpoints
+WHERE thread_id IN (
+  SELECT thread_id FROM app.chat_session
+  WHERE status = 'closed' AND closed_at &lt; now() - interval '7 days'
+);</code></pre>
+<hr>
+<h2 id="12-与图节点的对应关系">12. 与图/节点的对应关系</h2>
+<div class="tw"><table><thead><tr><th>图元素</th><th>落库位置</th></tr></thead><tbody><tr><td><code>thread_id</code></td><td><code>app.chat_session.thread_id</code> ↔ <code>lg.checkpoints.thread_id</code></td></tr><tr><td><code>turn_id</code></td><td><code>app.graph_run.turn_id</code>、<code>app.chat_message.turn_id</code></td></tr><tr><td><code>review_audit</code> 写入</td><td>风险审查子图 <code>issue_token</code> 节点</td></tr><tr><td><code>hard_rule_hit</code> 写入</td><td>风险审查子图 <code>hard_rules</code> 节点</td></tr><tr><td><code>release_token</code> 签发</td><td><code>issue_token</code> 节点；校验在 <code>send</code> / <code>execute_op</code></td></tr><tr><td><code>op_execution</code> 幂等</td><td><code>execute_op</code> 节点（唯一写入方）</td></tr><tr><td><code>op_confirmation</code></td><td><code>await_confirm</code> 恢复后写入</td></tr><tr><td><code>handoff_ticket</code> 创建</td><td><code>human_handoff</code> 节点</td></tr><tr><td><code>chat_session.ai_enabled=false</code></td><td>工单 <code>accepted</code> 时由运营后台写入（不是图写的）</td></tr><tr><td><code>emergency_lexicon</code> / <code>rule_registry</code></td><td><code>emergency_screen</code> 与 <code>hard_rules</code> 只读加载（带缓存）</td></tr><tr><td><code>kb_*</code> 元数据</td><td>知识科普子图 <code>kb_retrieve</code> 的过滤条件来源</td></tr></tbody></table></div>
+<hr>
+<h2 id="13-mvp-阶段可以偷懒的地方但要留痕">13. MVP 阶段可以偷懒的地方（但要留痕）</h2>
+<div class="tw"><table><thead><tr><th>表</th><th>MVP 处理</th><th>备注</th></tr></thead><tbody><tr><td><code>app.kb_document</code> / <code>kb_chunk</code></td><td><strong>只建表，灌 10–20 条演示数据即可</strong></td><td>知识库内容你说了可以暂缓</td></tr><tr><td><code>app.doctor_credential</code> / <code>project_price</code></td><td>造演示数据</td><td>上线前换成机构接口</td></tr><tr><td><code>app.schedule_slot</code> / <code>appointment</code></td><td>造演示数据 + 本地事务</td><td>上线前换成预约系统接口</td></tr><tr><td><code>app.user_fact</code></td><td>可以先不做冲突标注</td><td>但字段留着</td></tr><tr><td><code>app.chat_turn_summary</code></td><td>会话不长可先不写</td><td>字段留着</td></tr><tr><td><code>lg.*</code></td><td>必须真建</td><td>否则 interrupt / 恢复跑不起来</td></tr><tr><td><code>app.review_audit</code> / <code>hard_rule_hit</code> / <code>release_token</code></td><td><strong>必须真建</strong></td><td>这是审计与合规的骨架，演示时最有说服力</td></tr></tbody></table></div>
+<hr>
+<h2 id="14-几条必须写进-ddl-的约束别只写在代码里">14. 几条必须写进 DDL 的约束（别只写在代码里）</h2>
+<ol><li><code>op_execution.idempotency_key</code> 是<strong>主键</strong> —— 把幂等交给数据库，而不是靠应用层自觉。</li><li><code>app.chat_message.content_hash</code> + <code>release_token</code> 同时存在 —— 能证明"发出去的就是审过的那一版"。</li><li><code>app.user_attachment.consent_id</code> 未授权应为 <code>NULL</code> 且<strong>不允许被检索使用</strong>（应用层强校验 + 视图隔离）。</li><li><code>ops.handoff_ticket.accepted_at</code> 为空的工单，<strong>不允许</strong>向上层返回"人工已接入"（在 API 层断言）。</li><li><code>app.kb_document.status = 'approved'</code> 且 <code>expire_at &gt; now()</code> 才允许被检索 —— 检索过滤条件必须来自表，不能靠内存过滤。</li></ol></main></div>
+<footer>由 <code>build-docs.cjs</code> 从 Markdown 生成 —— 请修改源文件后重新执行，不要手改本页。图与源码自检：<code>node check-mermaid.cjs</code>。</footer>
+</body>
+</html>

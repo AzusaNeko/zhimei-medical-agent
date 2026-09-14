@@ -1,0 +1,76 @@
+%% 智美医美顾问 · 知识科普 Agent 子图（主图中的 k_agent）内部结构
+%% 边界契约：
+%%   入口 1：主图 dispatch 按「科普咨询」意图分派进入 kb_intake
+%%   入口 2：主图 risk_gate 判定「需修改」时，revise 定向回到 kb_draft 重新生成
+%%           （★ 跑起来才发现：只回到 kb_verify 是"只核对不重生成"，内容没变，
+%%             审查必然再次命中同一条规则，白白耗尽修订预算）
+%%   出口：kb_return / kb_clarify / kb_handoff 三个出口都回到主图 aggregate，统一送风险审查
+%% 铁律：本子图只产出「带证据的待审草稿」，不直接对用户说话。
+
+flowchart TB
+  revise_in(["主图 revise · 定向修订<br/>revise_in"])
+
+  kb_intake["1. 任务接收与边界判断<br/>kb_intake · Qwen3-8B"]
+  kb_scope{"属于科普范围？<br/>kb_scope"}
+  kb_handoff["返回转交建议<br/>kb_handoff"]
+  kb_context["2. 读取必要且经授权的上下文<br/>kb_context · 权限 / 记忆服务"]
+  kb_decompose["3. 解析问题并拆分检索子任务<br/>kb_decompose · Qwen3-8B"]
+  kb_sufficiency{"信息是否充分？<br/>kb_sufficiency"}
+  kb_clarify["生成简短澄清问题<br/>kb_clarify · Qwen3-8B"]
+
+  subgraph EVIDENCE["已审核资料与证据处理"]
+    kb_retrieve["4. 混合检索审核知识库<br/>kb_retrieve · BGE-M3 + Reranker"]
+    kb_evidence["5. 证据筛选与充分性检查<br/>kb_evidence · Qwen3-32B → R1"]
+  end
+
+  kb_evidence_ok{"证据足以回答？<br/>kb_evidence_ok"}
+  kb_limit["缩小回答范围、说明未知<br/>kb_limit"]
+  kb_draft["6. 生成科普草稿<br/>kb_draft · Qwen3-30B-A3B"]
+  kb_verify["7. 事实与引用逐项核对<br/>kb_verify · Qwen3-32B → R1"]
+  kb_verified{"重要结论均有依据？<br/>kb_verified"}
+  kb_return["8. 返回结构化待审草稿<br/>kb_return · 正文 / 引用 / 缺口 / 路由建议"]
+
+  to_aggregate(["回主图 aggregate<br/>统一送风险审查<br/>to_aggregate"])
+
+  %% ---------- 主干 ----------
+  kb_intake --> kb_scope
+  kb_scope -->|否：诊断、异常症状或预约操作| kb_handoff
+  kb_scope -->|是| kb_context
+  kb_context --> kb_decompose
+  kb_decompose --> kb_sufficiency
+  kb_sufficiency -->|否：缺失信息会影响回答| kb_clarify
+  kb_sufficiency -->|是，或不影响一般科普| kb_retrieve
+
+  kb_retrieve --> kb_evidence
+  kb_evidence --> kb_evidence_ok
+  kb_evidence_ok -->|否| kb_limit
+  kb_evidence_ok -->|是| kb_draft
+  kb_limit --> kb_draft
+
+  kb_draft --> kb_verify
+  kb_verify --> kb_verified
+  kb_verified -->|否：回到生成，重新核对| kb_draft
+  kb_verified -->|是| kb_return
+
+  %% ---------- 出口：三个出口都回主图送审 ----------
+  kb_handoff --> to_aggregate
+  kb_clarify --> to_aggregate
+  kb_return --> to_aggregate
+
+  %% ---------- 修订再入 ----------
+  revise_in -.->|按审查意见重新生成，再走一遍事实核对| kb_draft
+
+  %% ---------- 样式 ----------
+  classDef step fill:#e6f4ee,stroke:#3f8a72,stroke-width:1.5px,color:#1a5044;
+  classDef dec fill:#fff4dd,stroke:#b3862a,stroke-width:1.5px,color:#6d4c08;
+  classDef ret fill:#e8f1fb,stroke:#4a7fb5,stroke-width:1.5px,color:#17405f;
+  classDef stop fill:#ffe3de,stroke:#c8493a,stroke-width:2px,color:#8a2a1e;
+  classDef ext fill:#f4f6f8,stroke:#a9b8c2,stroke-dasharray:4 3,color:#4f6270;
+
+  class kb_intake,kb_context,kb_decompose,kb_draft,kb_verify,kb_return step;
+  class kb_scope,kb_sufficiency,kb_evidence_ok,kb_verified dec;
+  class kb_retrieve,kb_evidence ret;
+  class kb_limit,kb_clarify,kb_handoff stop;
+  class revise_in,to_aggregate ext;
+
+  style EVIDENCE fill:#fbfcfe,stroke:#ccd9e4,stroke-width:1px

@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>总控调度 Agent 与意图识别分流 Agent（伪代码 + Prompt 详解） · 智美医美顾问设计文档</title>
+<style>
+:root{--ink:#19344a;--muted:#586d7b;--line:#d7e1e7;--accent:#226b62;--bg:#f3f6f8;--code:#f7f9fb}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif}
+a{color:#1f6f8b}
+.topbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;padding:12px 28px;background:#fff;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;line-height:1.3}
+.brand .eyebrow{font:11px/1.4 Consolas,monospace;color:var(--accent);letter-spacing:1.5px}
+.brand b{font-size:15px}
+.topbar nav{display:flex;flex-wrap:wrap;gap:6px}
+.topbar nav a{border:1px solid var(--line);border-radius:6px;padding:5px 11px;font-size:13px;text-decoration:none;color:var(--ink);background:#fff}
+.topbar nav a:hover{background:#e8f2f0;border-color:#75a69a}
+.topbar nav a.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.layout{display:grid;grid-template-columns:272px minmax(0,1fr);gap:26px;max-width:1560px;margin:0 auto;padding:26px 28px 60px}
+.toc{position:sticky;top:74px;align-self:start;max-height:calc(100vh - 96px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 14px}
+.toc b{display:block;font-size:12px;color:var(--muted);letter-spacing:1px;margin-bottom:8px}
+.toc ul{list-style:none;margin:0;padding:0}
+.toc li{margin:3px 0;font-size:13px;line-height:1.5}
+.toc li.l3{padding-left:14px;font-size:12.5px}
+.toc a{color:var(--muted);text-decoration:none;display:block;padding:2px 0}
+.toc a:hover{color:var(--accent)}
+.doc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:30px 38px 44px;min-width:0}
+.doc h1{font-size:29px;letter-spacing:-.5px;margin:0 0 10px;line-height:1.35}
+.doc h2{font-size:22px;margin:36px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+.doc h2:first-of-type{border-top:0;padding-top:0}
+.doc h3{font-size:17px;margin:26px 0 8px}
+.doc h4{font-size:15px;margin:20px 0 6px;color:#2c4a5e}
+.doc p{margin:9px 0}
+.doc ul,.doc ol{margin:9px 0;padding-left:24px}
+.doc li{margin:4px 0}
+.doc code{font-family:Consolas,"Courier New",monospace;font-size:12.5px;background:#eef2f5;padding:1px 5px;border-radius:4px;color:#2c4f6b}
+.doc pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow:auto;margin:12px 0}
+.doc pre code{background:none;padding:0;font-size:12.5px;line-height:1.7;color:#243b4a;white-space:pre}
+.doc blockquote{margin:12px 0;padding:12px 16px;background:#e8f2f0;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;color:#315a58}
+.doc blockquote p{margin:5px 0}
+.doc blockquote ol,.doc blockquote ul{padding-left:20px}
+.doc hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+.tw{overflow:auto;border:1px solid var(--line);border-radius:10px;margin:14px 0}
+.doc table{width:100%;border-collapse:collapse;font-size:13px}
+.doc th,.doc td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+.doc th{background:#f3f6f8;font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+.doc td code{font-size:12px;white-space:normal;word-break:break-word}
+footer{max-width:1560px;margin:0 auto;padding:0 28px 44px;color:var(--muted);font-size:12px}
+@media(max-width:1080px){.layout{grid-template-columns:1fr}.toc{position:static;max-height:none}.doc{padding:22px 20px 32px}}
+@media print{.topbar,.toc{display:none}.layout{display:block;padding:0}.doc{border:0;padding:0}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="eyebrow">ZHIMEI / DESIGN DOCS</span><b>智美医美顾问 · 设计文档</b></div><nav><a href="langgraph-v1.html">架构总览</a><a href="arch-pseudocode.html">伪代码讲解</a><a href="arch-supervisor.html" class="active">总控与意图</a><a href="config-rules.html">规则与参数</a><a href="data-model.html">数据模型</a><a href="ops-console.html">运营后台</a></nav></header>
+<div class="layout"><aside class="toc"><b>本页目录</b><ul><li class="l2"><a href="#0-先澄清一个观念总控-agent-不是一个节点">0. 先澄清一个观念：总控 Agent 不是一个节点</a></li><li class="l2"><a href="#1-总控的四个承担点">1. 总控的四个承担点</a></li><li class="l3"><a href="#11-normalize输入标准化与会话关联">1.1 <code>normalize</code>：输入标准化与会话关联</a></li><li class="l3"><a href="#12-dispatch任务规划与分派">1.2 <code>dispatch</code>：任务规划与分派</a></li><li class="l3"><a href="#13-aggregate结果聚合">1.3 <code>aggregate</code>：结果聚合</a></li><li class="l3"><a href="#14-retrycheck重试状态与审计">1.4 <code>retry_check</code>：重试、状态与审计</a></li><li class="l2"><a href="#2-总控唯一需要的-promptsupervisorplan">2. 总控唯一需要的 Prompt：<code>supervisor_plan</code></a></li><li class="l2"><a href="#3-意图识别分流-agent">3. 意图识别分流 Agent</a></li><li class="l3"><a href="#31-职责边界">3.1 职责边界</a></li><li class="l3"><a href="#32-输入契约">3.2 输入契约</a></li><li class="l3"><a href="#33-输出契约">3.3 输出契约</a></li><li class="l3"><a href="#34-时间归一化规则">3.4 时间归一化规则</a></li><li class="l3"><a href="#35-关键-prompt-全文">3.5 关键 Prompt 全文</a></li><li class="l3"><a href="#36-失败与降级">3.6 失败与降级</a></li><li class="l3"><a href="#37-评测指标与测试集">3.7 评测指标与测试集</a></li><li class="l2"><a href="#4-一次完整交互的协作时序">4. 一次完整交互的协作时序</a></li><li class="l2"><a href="#5-反面清单这些做法一定会出问题">5. 反面清单（这些做法一定会出问题）</a></li></ul></aside><main class="doc"><h1 id="总控调度-agent-与意图识别分流-agent伪代码--prompt-详解">总控调度 Agent 与意图识别分流 Agent（伪代码 + Prompt 详解）</h1>
+<blockquote><p>配套：<code>langgraph-pseudocode.md</code>（整体架构）、<code>mvp-config-rules.md</code>（规则与参数）。<br>本文把这两个 Agent 拆到"能照着写"的粒度。</p></blockquote>
+<hr>
+<h2 id="0-先澄清一个观念总控-agent-不是一个节点">0. 先澄清一个观念：总控 Agent 不是一个节点</h2>
+<p>蓝图里"总控调度 Agent"有 4 个内部节点，但<strong>在 LangGraph 里它不应该被实现成一个 LLM 大节点</strong>，<br>而是<strong>主图的骨架本身</strong>：</p>
+<div class="tw"><table><thead><tr><th>蓝图里总控的内部节点</th><th>代码里的落点</th><th>类型</th></tr></thead><tbody><tr><td>输入标准化与会话关联</td><td><code>normalize</code> 节点</td><td>纯规则</td></tr><tr><td>多意图识别与字段抽取</td><td><code>classify</code> 节点（<strong>属于意图识别 Agent</strong>）</td><td>LLM</td></tr><tr><td>任务规划与结果聚合</td><td><code>dispatch</code> + <code>aggregate</code> 两个节点</td><td>纯规则</td></tr><tr><td>重试、状态与审计</td><td><code>retry_check</code> + state 字段 + <code>audit_log</code></td><td>纯规则</td></tr></tbody></table></div>
+<p><strong>为什么不能做成一个大 LLM 节点</strong>（这段面试可以直接讲）：</p>
+<ol><li><strong>可审计性</strong>：一个节点内部做了什么，checkpointer 只留一个状态快照，出问题无法定位是哪一步错了</li><li><strong>可恢复性</strong>：<code>interrupt</code> 只能挂在节点边界上；大节点内部无法挂起，用户确认流程做不了</li><li><strong>并行能力</strong>：多意图并行扇出依赖 <code>Send</code>，而 <code>Send</code> 只能由路由函数产生</li><li><strong>确定性</strong>：路由是<strong>规则问题</strong>，不是概率问题。让模型决定"这句话该谁处理"，<br>就是把最不该出错的一步交给最不稳定的环节</li><li><strong>成本与延迟</strong>：每轮多一次大模型调用，且没有任何收益</li></ol>
+<p>一句话：<strong>总控是图的形状，不是图里的一个框。</strong></p>
+<hr>
+<h2 id="1-总控的四个承担点">1. 总控的四个承担点</h2>
+<h3 id="11-normalize输入标准化与会话关联">1.1 <code>normalize</code>：输入标准化与会话关联</h3>
+<pre><code class="lang-python"># graph/nodes/intake.py
+async def normalize(state: ZhimeiState, *, deps) -&gt; dict:
+    """
+    职责：
+      1. 绑定会话与身份（谁是这个人、能不能服务）
+      2. 输入清洗（去控制字符、限长、敏感串预标记）
+      3. 生成本轮 turn_id
+      4. 重置"本轮字段"，但保留跨轮次预算（clarify_count）
+    不调模型。
+    """
+    session = await deps.pg.get_session(state["session_id"])
+    if session["ai_enabled"] is False:
+        # 已被人工接管 → 本轮不进图（由 API 层拦截，这里是双保险）
+        raise HumanTakeoverActive(session["session_id"])
+
+    auth = await deps.pg.load_auth(state["session_id"])
+    cleaned = deps.text.clean(state["user_input"])          # 控制字符、零宽字符、超长截断
+    flags = deps.text.prescan(cleaned)                      # 手机号/身份证/银行卡 预标记（脱敏用）
+
+    return {
+        "auth": auth,
+        "user_input": cleaned,
+        "slot_flags": flags,
+        "turn_id": deps.uuid(),
+        # ── 每轮重置 ──
+        "review_round": 0, "revision_count": 0, "review_feedback": [],
+        "confirmed": None, "confirm_result": None,
+        "execution_result": None, "handoff_ticket": None, "outbound": None,
+        # ── 刻意不重置：clarify_count ──
+        "audit_log": [{"event": "normalize", "auth_ok": auth["verified"],
+                       "clarify_count": state.get("clarify_count", 0)}],
+    }</code></pre>
+<p><strong>状态契约</strong>：读取 <code>session_id</code> / <code>user_input</code> / <code>clarify_count</code>；写入 <code>auth</code> / <code>turn_id</code> / 全部本轮字段。</p>
+<p><strong>失败处理</strong>：会话不存在 → 抛业务异常由 API 层回 404；<code>ai_enabled=false</code> → 不走图，直接进人工队列。</p>
+<h3 id="12-dispatch任务规划与分派">1.2 <code>dispatch</code>：任务规划与分派</h3>
+<p>这是总控里<strong>唯一有"决策"色彩</strong>的地方，但它仍然是纯规则。</p>
+<pre><code class="lang-python"># 意图 → 节点 的静态路由表（配置化，可热更新）
+ROUTE = {
+    "knowledge_edu": "k_agent",
+    "recommend":     "r_agent",
+    "clinic_info":   "c_agent",
+    "booking":       "b_agent",
+    "postcare":      "p_agent",
+}
+
+# 多意图并存时的优先级（数字越小越优先）
+PRIORITY = ["booking", "postcare", "knowledge_edu", "clinic_info", "recommend"]
+MAX_FANOUT = 3          # 一轮最多扇出几个 Agent，防止成本失控
+
+
+def dispatch(state: ZhimeiState) -&gt; list[Send] | str:
+    """
+    纯规则。返回：
+      - list[Send]  → 多意图并行扇出
+      - 节点名字符串 → 单路或兜底
+    """
+    if state.get("emergency"):
+        return "emergency_draft"                  # 紧急优先，不跑常规 Agent
+
+    intents = resolve_intents(state["intents"])   # 见下方冲突消解
+    if not intents:
+        if state.get("clarify_count", 0) &gt;= MAX_CLARIFY:
+            return "k_agent" if has_any_slot(state["slots"]) else "human_handoff"
+        return "clarify"
+
+    targets = list(dict.fromkeys(ROUTE[i] for i in intents if i in ROUTE))
+    return [Send(t, {"slots": state["slots"], "auth": state["auth"],
+                     "turn_id": state["turn_id"]}) for t in targets[:MAX_FANOUT]]
+
+
+# ── 多意图冲突消解：规则表，不调模型 ─────────────────────────
+CONFLICT_RULES = [
+    # (条件, 处理, 理由)
+    (lambda s: "clarify" in s and len(s) &gt; 1,        "drop_clarify",
+     "已有明确意图时不该再反问"),
+    (lambda s: "postcare" in s and "knowledge_edu" in s, "drop_knowledge",
+     "术后场景优先，避免科普与护理建议互相打架"),
+    (lambda s: "booking" in s and ("postcare" in s or "recommend" in s), "keep_booking",
+     "有明确操作意图时先完成操作，其余放到下一轮"),
+    (lambda s: len(s) &gt; MAX_FANOUT,                  "truncate_by_priority",
+     "按优先级截断，防止一轮扇出过多"),
+]
+
+def resolve_intents(intents: list[str]) -&gt; list[str]:
+    """去 `clarify`、应用冲突规则、按优先级排序。确定性函数，可单测。"""
+    s = [i for i in dict.fromkeys(intents) if i != "clarify"]
+    if "postcare" in s and "knowledge_edu" in s:
+        s.remove("knowledge_edu")
+    if "booking" in s and ("postcare" in s or "recommend" in s):
+        s = ["booking"] + [i for i in s if i == "knowledge_edu"]
+    return sorted(s, key=lambda i: PRIORITY.index(i) if i in PRIORITY else 99)</code></pre>
+<p><strong>为什么 <code>booking</code> 要压过 <code>recommend</code>/<code>postcare</code></strong>：用户说"帮我约周五的热玛吉"时，<br>他此刻要的是<strong>把事办了</strong>。同时生成一段推荐话术和一段术后建议，会让回复变长、重点模糊，<br>而且推荐内容可能改动预约参数。分开两轮处理，体验更干净。</p>
+<p><strong>什么时候才需要 LLM 参与规划</strong>：只有当多意图之间的取舍<strong>无法用规则表达</strong>时（见 §2）。<br>MVP 阶段规则表已经能覆盖绝大多数情况，<strong>默认不调 LLM</strong>。</p>
+<h3 id="13-aggregate结果聚合">1.3 <code>aggregate</code>：结果聚合</h3>
+<pre><code class="lang-python"># 拼接顺序固定，保证同样输入产出同样文本（可复现、可回归测试）
+MERGE_ORDER = ["emergency_draft", "clarify", "p_agent", "k_agent",
+               "c_agent", "r_agent", "b_agent"]
+
+async def aggregate(state: ZhimeiState, *, deps) -&gt; dict:
+    """
+    职责：
+      1. 把七路草稿整理成【一个待审对象】
+      2. 合并引用与缺口
+      3. 操作类草稿 → 构造 operation 并算 plan_hash
+    """
+    drafts = state["drafts"]                    # reducer 已保证只留本轮
+    if not drafts:
+        return {"draft": {"content": "", "citations": [], "gaps": ["未能产出草稿"]},
+                **begin_review_round(state, "content")}
+
+    ordered = sorted(drafts, key=lambda d: MERGE_ORDER.index(d["agent"]))
+
+    if len(ordered) == 1:
+        content = ordered[0]["content"]
+    else:
+        # 多意图：加小标题分段，避免两段内容黏在一起看不出是两件事
+        content = "\n\n".join(f"【{deps.labels[d['agent']]}】\n{d['content']}" for d in ordered)
+
+    operation = None
+    for d in ordered:
+        if d.get("operation"):                  # b_agent 产出
+            operation = {**d["operation"],
+                         "plan_hash": deps.security.hash_plan(d["operation"])}
+            break
+
+    kind = "operation" if operation else "content"
+    return {
+        "draft": {
+            "content": content,
+            "citations": dedupe_citations([c for d in ordered for c in d["citations"]]),
+            "gaps": list(dict.fromkeys(g for d in ordered for g in d["gaps"])),
+        },
+        "operation": operation,
+        "plan_hash": operation["plan_hash"] if operation else None,
+        **begin_review_round(state, kind),
+    }</code></pre>
+<p><strong>三个细节</strong>：</p>
+<ul><li><code>MERGE_ORDER</code> 是<strong>固定列表</strong>而不是 <code>dict</code> 顺序 —— 保证可复现，也方便写快照测试</li><li><code>dedupe_citations</code> 按 <code>(doc_id, version, quote)</code> 去重，避免同一证据被引用多次</li><li><code>plan_hash</code> 在这里算，且<strong>只算一次</strong> —— 下游的确认、执行、凭据校验都用它</li></ul>
+<h3 id="14-retrycheck重试状态与审计">1.4 <code>retry_check</code>：重试、状态与审计</h3>
+<pre><code class="lang-python">async def retry_check(state: ZhimeiState, *, deps) -&gt; dict:
+    """
+    总控的收口节点：三种预算在这里统一检查（见 langgraph-pseudocode.md §3.4）。
+    它不改内容，只做"还能不能继续"的判定与记录。
+    """
+    over = []
+    if state.get("revision_count", 0) &gt; settings.MAX_REVISION:
+        over.append("revision_exhausted")
+    if state.get("clarify_count", 0) &gt; settings.MAX_CLARIFY:
+        over.append("clarify_exhausted")
+    if state.get("kb_verify_round", 0) &gt; settings.KB_MAX_VERIFY_LOOP:
+        over.append("kb_loop_exhausted")
+
+    return {"audit_log": [{"event": "retry_check",
+                           "revision": state.get("revision_count", 0),
+                           "clarify": state.get("clarify_count", 0),
+                           "over_budget": over}]}
+
+
+def after_retry_check(state: ZhimeiState) -&gt; str:
+    return "retry" if state["revision_count"] &lt;= settings.MAX_REVISION else "exhausted"</code></pre>
+<hr>
+<h2 id="2-总控唯一需要的-promptsupervisorplan">2. 总控唯一需要的 Prompt：<code>supervisor_plan</code></h2>
+<p>默认情况下总控<strong>不调模型</strong>。只有一种场景需要：<strong>多意图之间出现规则表无法表达的取舍</strong>，例如：</p>
+<blockquote><p>"我上次做的那个项目效果不太好，你们浦东店还有别的医生吗？顺便这次能不能便宜点"</p></blockquote>
+<p>这里有 <code>postcare</code>（效果不满）+ <code>clinic_info</code>（换医生）+ 隐含 <code>recommend</code>（换项目）+ 价格诉求。<br>规则表能排序，但"这一轮到底先解决哪个"需要理解语义。</p>
+<pre><code class="lang-python">SUPERVISOR_PLAN_SYSTEM = """
+你是医美咨询系统的任务规划模块。**你不是客服，不要生成任何面向用户的话术。**
+
+输入是用户这一句话解析出的多个意图与槽位。你的唯一任务是决定：
+  1. 这一轮应该交给哪些专业模块处理，以及顺序
+  2. 哪些意图应当留到下一轮（避免一轮做太多事，回复变长、重点模糊）
+  3. 是否存在必须先向用户澄清、否则无法推进的情况
+
+严格约束：
+- 只能从给定的意图列表里挑选，禁止新增意图。
+- 不得改写、不得补充业务内容，不得输出任何医疗判断。
+- 涉及操作类意图（预约/改约/取消）时，它必须排在最前——用户此刻要的是把事办了。
+- 涉及术后异常、争议、投诉时，必须标注 need_human=true。
+- 不确定就把该意图放进 defer，不要硬排。
+
+只输出 JSON。
+"""
+
+SUPERVISOR_PLAN_USER = """
+用户原话：{user_input}
+已识别意图：{intents}
+已抽取槽位：{slots_json}
+会话已进行轮数：{turn_no}
+上一轮已处理的意图（避免重复）：{last_intents}
+
+输出 JSON：
+{
+  "ordered": ["booking", "clinic_info"],
+  "defer": ["recommend"],
+  "reason": "用户有明确换医生诉求，先解决可执行的查询；推荐留到下一轮",
+  "need_clarify": false,
+  "clarify_question": null,
+  "need_human": false,
+  "human_reason": null
+}
+"""</code></pre>
+<p><strong>调用条件</strong>（不是每轮都调）：</p>
+<pre><code class="lang-python">async def maybe_plan(state, *, deps):
+    intents = resolve_intents(state["intents"])
+    if len(intents) &lt;= 1:
+        return {}                                  # 单意图：规则表足够
+    if not deps.rules.needs_llm_planning(intents): # 规则表能覆盖的常见组合
+        return {}                                  # 直接返回，省一次调用
+    plan = await deps.llm.structured("supervisor_plan", SupervisorPlan,
+                                      system=SUPERVISOR_PLAN_SYSTEM,
+                                      user=SUPERVISOR_PLAN_USER.format(...))
+    return {"plan": plan.model_dump()}</code></pre>
+<blockquote><p><strong>设计要点</strong>：LLM 规划是<strong>兜底</strong>，不是主路径。规则能覆盖的组合直接走规则，<br>这既省成本，也让绝大多数请求的编排是<strong>确定性</strong>的。</p></blockquote>
+<hr>
+<h2 id="3-意图识别分流-agent">3. 意图识别分流 Agent</h2>
+<h3 id="31-职责边界">3.1 职责边界</h3>
+<div class="tw"><table><thead><tr><th>做</th><th>不做</th></tr></thead><tbody><tr><td>识别一句话里的一个或多个意图</td><td>❌ 生成任何面向用户的文本</td></tr><tr><td>抽取槽位（项目/门店/医生/时间/症状/术后天数/预算）</td><td>❌ 判断内容能不能发给用户（那是风险审查的事）</td></tr><tr><td>相对时间归一化为绝对时间，并给出推断依据</td><td>❌ 做医学判断（"这是不是正常"）</td></tr><tr><td>输出置信度与"不确定"标记</td><td>❌ 决定路由（路由是 <code>dispatch</code> 的规则表）</td></tr><tr><td>预标记紧急信号（供规则层复核）</td><td>❌ 决定是否转人工</td></tr></tbody></table></div>
+<blockquote><p><strong>一句话</strong>：它只做"把自然语言变成结构化字段"，不做任何决策。</p></blockquote>
+<h3 id="32-输入契约">3.2 输入契约</h3>
+<pre><code class="lang-python">{
+  "user_input": str,               # 本轮用户原话（已清洗）
+  "history_slots": dict,           # 会话内已累积的槽位（用于指代消解："那个项目"）
+  "recent_turns": list[dict],      # 最近 3 轮 (role, content)，只用于消解指代，不用于抽取
+  "entity_dict": {                 # ★ 业务实体字典：把口语映射到标准名
+      "projects": ["热玛吉", "超声炮", "水光针", "线雕", ...],
+      "stores":   ["浦东店", "静安店", ...],
+      "doctors":  ["张医生", "李医生", ...],
+  },
+  "now": "2025-03-12T14:30:00+08:00"   # ★ 时间归一化必须有基准时刻
+}</code></pre>
+<p><strong>三个关键点</strong>：</p>
+<ul><li><code>entity_dict</code> 必须注入。否则"热玛吉"可能被识别成"热马吉"，下游查库全部落空</li><li><code>now</code> 必须传，且由服务端给（不能让模型自己猜今天几号）</li><li><code>recent_turns</code> <strong>只给最近 3 轮</strong>且<strong>明确标注"仅用于理解指代"</strong>，否则模型会去抽取历史信息造成重复</li></ul>
+<h3 id="33-输出契约">3.3 输出契约</h3>
+<pre><code class="lang-python">class ClassifyOut(BaseModel):
+    intents: list[Literal["knowledge_edu", "recommend", "clinic_info",
+                          "booking", "postcare", "clarify", "other"]]
+    slots: Slots                      # project/store/doctor/datetime/symptom/postop_days/budget
+    time_note: str | None             # 相对时间的推断依据，例如"下周三 = 2025-03-19"
+    entity_note: str | None           # 实体归一化说明，例如"'热马吉'→'热玛吉'"
+    emergency_hint: bool = False      # ★ 仅供规则层复核，不直接触发紧急路径
+    emergency_terms: list[str] = []   # 触发提示的原词
+    uncertain: bool = False
+    confidence: float = 1.0</code></pre>
+<blockquote><p><code>emergency_hint</code> 只是<strong>提示</strong>：真正的紧急判定在 <code>emergency_screen</code> 的规则层<br>（见 <code>mvp-config-rules.md</code> §1）。模型说"可能是紧急"不能直接触发转人工，<br>但模型说"不是紧急"<strong>也不能</strong>阻止规则层触发 —— 这是单向的：</p></blockquote>
+<pre><code class="lang-python">def emergency_screen_final(rule_hits, model_hint) -&gt; bool:
+    return bool(rule_hits) or model_hint      # 规则优先，模型只能加不能减</code></pre>
+<h3 id="34-时间归一化规则">3.4 时间归一化规则</h3>
+<div class="tw"><table><thead><tr><th>用户说法</th><th>归一化结果</th><th>说明</th></tr></thead><tbody><tr><td>"下周三下午"</td><td><code>2025-03-19T14:00:00+08:00</code>（并写 <code>time_note</code>）</td><td>默认下午 = 14:00，需在 note 里说明</td></tr><tr><td>"后天上午"</td><td>相对于 <code>now</code> + 2 天，09:00–12:00 → 取 09:00</td><td>——</td></tr><tr><td>"这周末"</td><td><code>2025-03-15</code> 或 <code>2025-03-16</code> → <strong>不猜</strong>，写入 <code>slots.datetime=null</code> 并标记待澄清</td><td>★ 有歧义的时间不猜</td></tr><tr><td>"越快越好"</td><td><code>datetime=null</code>，<code>slots.urgency="asap"</code></td><td>不猜具体时间</td></tr></tbody></table></div>
+<p><strong>原则</strong>：<strong>能确定的归一化，不能确定的留空并交给澄清流程</strong>。<br>猜一个看起来合理的时间，会导致用户确认了一个他从没说过的时间——这是操作类场景的严重事故。</p>
+<h3 id="35-关键-prompt-全文">3.5 关键 Prompt 全文</h3>
+<pre><code class="lang-python">CLASSIFY_SYSTEM = """
+【角色边界】
+你是医美咨询系统的意图理解模块，不是客服。不要寒暄、不要自我介绍、不要生成给用户看的话术。
+你不做医学判断，不给建议，不判断内容是否合规。
+
+【任务】
+把用户这一句话解析为：意图 + 槽位 + 时间归一化 + 紧急信号提示。
+
+【意图取值】只能从下面选，可多选：
+  knowledge_edu  —— 问原理、区别、流程、恢复期等一般科普
+  recommend      —— 问"我适合什么""推荐什么"
+  clinic_info    —— 问门店、医生、资质、地址、营业时间
+  booking        —— 预约、改约、取消
+  postcare       —— 术后护理、术后症状、恢复情况
+  clarify        —— 无法判断用户想干什么
+  other          —— 与业务无关
+
+【槽位抽取规则】
+- 只抽取用户【明确说出】的内容。没说就留 null，禁止推断、禁止用常识补全。
+- 指代词（"那个项目""上次那个"）只有在【已知会话槽位】里有对应值时才可填充，并写进 entity_note。
+- 项目名、门店名、医生名必须归一化为【业务字典】里的标准写法；近似音/错别字也要归一化，
+  并在 entity_note 里说明原始说法。
+- 症状只记录用户原话描述，不要改写成医学术语，不要判断严重程度。
+
+【时间归一化】
+- 以给定的 now 为基准，把相对时间转成 ISO 8601（含时区）。
+- 必须在 time_note 里写清推断过程（例如"'下周三'按 now=3/12 推算为 3/19"）。
+- 有歧义时不要猜：写入 null，并把歧义写进 time_note。
+
+【紧急信号提示】
+- 只在用户以【第一人称自述当前症状】时才置 emergency_hint=true，
+  并在 emergency_terms 里列出触发的原词。
+- 以下情况【不算】紧急信号，不要置 true：
+  · 询问风险（"会不会失明"）、听说/网上说（"网上说会烂脸"）
+  · 否定（"没有不舒服"）
+  · 第三人称（"我朋友做完眼睛看不清"）
+  · 假设（"如果失明了怎么办"）
+
+【输出】
+只输出 JSON，不要 markdown 代码块标记，不要任何解释文字。
+不确定的字段用 null，并把 uncertain 置 true —— 猜一个看起来合理的值比留空有害得多。
+"""
+
+CLASSIFY_USER = """
+now: {now}
+业务字典：
+  项目：{projects}
+  门店：{stores}
+  医生：{doctors}
+
+已知会话槽位（可沿用，可被本轮覆盖）：{history_slots_json}
+最近对话（仅用于理解指代，不要从中抽取新信息）：
+{recent_turns_block}
+
+用户这句话：{user_input}
+
+输出 JSON：
+{{
+  "intents": ["..."],
+  "slots": {{"project": null, "store": null, "doctor": null, "datetime": null,
+             "symptom": null, "postop_days": null, "budget": null}},
+  "time_note": null,
+  "entity_note": null,
+  "emergency_hint": false,
+  "emergency_terms": [],
+  "uncertain": false,
+  "confidence": 0.0
+}}
+"""</code></pre>
+<h4 id="few-shot-示例建议做成可配置的示例库按场景检索注入-23-条">Few-shot 示例（建议做成可配置的示例库，按场景检索注入 2–3 条）</h4>
+<div class="tw"><table><thead><tr><th>#</th><th>输入</th><th>期望输出要点</th></tr></thead><tbody><tr><td>1</td><td>"下周三下午能约浦东店的热玛吉吗"</td><td><code>intents=["booking"]</code>；<code>project="热玛吉"</code>；<code>store="浦东店"</code>；<code>datetime=2025-03-19T14:00+08:00</code>；<code>time_note</code> 写推算过程</td></tr><tr><td>2</td><td>"热玛吉和超声炮啥区别，哪个适合我，顺便看看浦东店有没有号"</td><td><code>intents=["knowledge_edu","recommend","clinic_info"]</code>（<strong>三个都要，不能只选一个</strong>）</td></tr><tr><td>3</td><td>"我做完水光第三天了，脸还是红，正常吗"</td><td><code>intents=["postcare"]</code>；<code>postop_days=3</code>；<code>symptom="脸还是红"</code>；<code>emergency_hint=false</code>（不判断严重程度）</td></tr><tr><td>4</td><td>"热玛吉会不会导致失明啊"</td><td><code>intents=["knowledge_edu"]</code>；<code>emergency_hint=**false**</code>（这是询问风险，不是自述症状）</td></tr><tr><td>5</td><td>"我现在脸发白还特别疼，是不是栓塞了"</td><td><code>intents=["postcare"]</code>；<code>emergency_hint=**true**</code>；<code>emergency_terms=["脸发白","特别疼"]</code></td></tr><tr><td>6</td><td>"那个怎么样"</td><td><code>intents=["clarify"]</code>；<code>uncertain=true</code>（指代无法消解）</td></tr><tr><td>7</td><td>"我朋友做完眼睛看不清"</td><td><code>emergency_hint=**false**</code>（第三人称）；<code>intents=["knowledge_edu"]</code></td></tr></tbody></table></div>
+<blockquote><p>示例 4 与示例 5 是这组 few-shot 里最有价值的两条：<br><strong>它们教模型区分"问风险"和"报症状"</strong>，这是紧急词表误报率的最大来源。</p></blockquote>
+<h3 id="36-失败与降级">3.6 失败与降级</h3>
+<pre><code class="lang-python">async def classify(state, *, deps) -&gt; dict:
+    payload = build_payload(state)
+    for attempt in (1, 2):
+        try:
+            out = await deps.llm.structured("classify", ClassifyOut,
+                                             system=CLASSIFY_SYSTEM, user=payload,
+                                             timeout=settings.T_UNDERSTAND)
+            return apply(out, state)
+        except (ValidationError, JSONDecodeError):
+            payload += "\n\n注意：上次输出不是合法 JSON，请只输出 JSON 对象本身。"
+        except asyncio.TimeoutError:
+            break
+
+    # 两级降级：先规则关键词，再澄清
+    guess = deps.rules.keyword_route(state["user_input"])     # 极简规则表
+    if guess:
+        return {"intents": guess, "slots": state.get("slots", {}),
+                "audit_log": [{"event": "classify_degraded", "mode": "keyword"}]}
+    return {"intents": ["clarify"], "uncertain": True,
+            "audit_log": [{"event": "classify_degraded", "mode": "clarify"}]}
+
+
+def apply(out: ClassifyOut, state) -&gt; dict:
+    """把模型输出并回状态，并处理跨轮次预算。"""
+    reset = {} if "clarify" in out.intents else {"clarify_count": 0}
+    return {
+        "intents": out.intents,
+        "slots": {**state.get("slots", {}), **{k: v for k, v in out.slots.items() if v}},
+        "emergency_hint": out.emergency_hint,
+        **reset,
+    }</code></pre>
+<p><strong>两条纪律</strong>：</p>
+<ol><li><strong>槽位合并用"非空覆盖"</strong>，不要用 <code>dict.update</code> 整体覆盖 —— 否则本轮没提到的槽位会被清空</li><li><strong>低置信不硬猜</strong>：<code>uncertain=true</code> 或 <code>confidence &lt; 0.5</code> 时，即使有意图也应优先走澄清</li></ol>
+<h3 id="37-评测指标与测试集">3.7 评测指标与测试集</h3>
+<div class="tw"><table><thead><tr><th>指标</th><th>目标（MVP）</th><th>说明</th></tr></thead><tbody><tr><td>意图多标签 micro-F1</td><td>≥ 0.90</td><td>多意图必须全中才算对</td></tr><tr><td><strong>漏路由率</strong></td><td><strong>&lt; 2%</strong></td><td>本该路由却没路由（最严重的错误类型）</td></tr><tr><td>槽位 F1（项目/门店/时间）</td><td>≥ 0.90</td><td>分类字段按精确匹配</td></tr><tr><td>时间归一化准确率</td><td>≥ 0.95</td><td>允许 ±1 天误差外的算错</td></tr><tr><td>紧急信号<strong>召回率</strong></td><td><strong>≥ 0.98</strong></td><td>规则层 + 模型层合计；宁可误报</td></tr><tr><td>紧急信号误报率</td><td>≤ 15%</td><td>超过就要调词表（走误报回流）</td></tr><tr><td>clarify 误判率</td><td>&lt; 5%</td><td>把本可回答的问题判成 clarify</td></tr></tbody></table></div>
+<p><strong>测试集构成建议</strong>（≥ 300 条人工标注）：</p>
+<pre><code>8 类意图 × {单意图, 多意图}            = 16 组
+× {槽位完整, 槽位缺失, 指代}            = 48 组
+× {陈述句, 疑问句, 否定句}              = 144 组
++ 紧急信号正例 30 条 + 易误报负例（问风险/听说/否定/第三人称/假设）50 条
++ 错别字与口语变体（"热马吉""打个水光"）30 条</code></pre>
+<blockquote><p>最后两组是这个测试集的重点。<strong>绝大多数真实事故来自"看起来像但不是"的样本</strong>，<br>而不是来自没见过的新意图。</p></blockquote>
+<hr>
+<h2 id="4-一次完整交互的协作时序">4. 一次完整交互的协作时序</h2>
+<p>用户说：<strong>"下周三下午能约浦东店的热玛吉吗，另外这玩意儿跟超声炮啥区别"</strong></p>
+<pre><code>normalize      会话绑定、turn_id、重置本轮字段（clarify_count 保留）
+   ↓
+emergency_screen  规则层未命中 → 模型兜底也未提示 → 继续
+   ↓
+classify       识别出 ["booking", "knowledge_edu"]
+               slots: project=热玛吉, store=浦东店, datetime=2025-03-19T14:00+08:00
+               time_note: "下周三 = 03-19"
+   ↓
+dispatch       规则冲突消解：booking 优先，knowledge_edu 保留（可并存）
+               → Send("b_agent"), Send("k_agent")   ← 并行
+   ↓
+b_agent        查档期/规则 → 操作方案 + 待确认文案（含 plan_hash）
+k_agent        子图：检索 → 证据 → 草稿 → 事实核对 → 待审草稿
+   ↓
+aggregate      合并成一段待审内容 + 构造 operation + 算 plan_hash
+   ↓
+risk_gate      审查（content + operation 两种 kind）
+   ↓
+pass → output_type → 操作类 → await_confirm（挂起等用户确认）</code></pre>
+<p>如果这一轮 <code>booking</code> 通过了但 <code>knowledge_edu</code> 被判 <code>revise</code>，<strong>两者会一起退回</strong>——<br>因为它们是同一个待审对象。这是有意的：宁可整段重审，也不要出现"一半内容审过、一半没审过"。</p>
+<hr>
+<h2 id="5-反面清单这些做法一定会出问题">5. 反面清单（这些做法一定会出问题）</h2>
+<div class="tw"><table><thead><tr><th>#</th><th>错误做法</th><th>后果</th></tr></thead><tbody><tr><td>1</td><td>把总控做成一个"大 LLM 节点"，让它决定一切</td><td>不可审计、不可挂起、丢失并行、成本翻倍</td></tr><tr><td>2</td><td>让意图识别 Agent 生成给用户看的话</td><td>绕过风险审查直接对用户说话</td></tr><tr><td>3</td><td>让模型输出"要不要放行 / 是否合规"</td><td>把裁决权交给概率模型，合规上无法解释</td></tr><tr><td>4</td><td>用模型做路由（"你觉得该谁处理"）</td><td>路由不确定，无法回归测试，多意图丢意图</td></tr><tr><td>5</td><td>多意图只选"最可能的一个"</td><td>用户的真实需求被丢掉一半，体验最差</td></tr><tr><td>6</td><td>槽位用 <code>dict.update</code> 合并</td><td>后续轮次把之前说的项目/门店清空</td></tr><tr><td>7</td><td>相对时间让模型自己猜</td><td>用户确认了一个他从没说过的时间 → 操作事故</td></tr><tr><td>8</td><td>模型说"不是紧急"就不再走规则层</td><td>漏报急症，这是最不可接受的失败模式</td></tr><tr><td>9</td><td>紧急提示交给模型现场生成措辞</td><td>最不能出错的场景用了最不稳定的环节</td></tr><tr><td>10</td><td>把 <code>clarify_count</code> 和 <code>revision_count</code> 混用一个计数</td><td>修订预算被追问吃掉，或反过来无限追问</td></tr></tbody></table></div></main></div>
+<footer>由 <code>build-docs.cjs</code> 从 Markdown 生成 —— 请修改源文件后重新执行，不要手改本页。图与源码自检：<code>node check-mermaid.cjs</code>。</footer>
+</body>
+</html>

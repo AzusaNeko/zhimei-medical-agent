@@ -1,0 +1,58 @@
+# ══════════════════════════════════════════════════════════════
+#  智美医美顾问 v2.0 · 仓库根忽略规则
+#
+#  这个仓库里有两类东西【绝对不能提交】，而且它们都很大或很敏感：
+#    · .env        —— 里面有真实的 DeepSeek API key
+#    · models/ 与缓存 —— 合计约 6 GB（.venv 1.03G / models 4.27G / .uv-cache 0.97G）
+#  一旦提交进去，就算后续删掉，历史里仍然留着（密钥泄漏 / 仓库永远瘦不下来）。
+#  所以宁可写得啰嗦一点。
+# ══════════════════════════════════════════════════════════════
+
+# ── 密钥与环境（最要紧的一条）──
+.env
+.env.*
+!.env.example
+*.env.local
+secrets.*
+*.key
+*.pem
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── 依赖缓存与模型权重（数 GB）──
+.uv-cache/
+.hf-cache/
+models/
+*.safetensors
+*.bin
+*.onnx
+*.pt
+*.pth
+
+# ── 本地数据与运行产物 ──
+*.log
+*.db
+*.sqlite3
+output/
+dist/
+build/
+
+# ── 编辑器 / 操作系统 ──
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,16 @@
+# 统一换行：仓库里一律存 LF，检出时按平台转换。
+# 不加这条的话，Windows 上每次提交都会刷一屏 "LF will be replaced by CRLF" 警告，
+# 而且同一份文件在不同机器上会显示成"整文件被改动"，看不出真正的改动。
+* text=auto
+
+# 这些是二进制，绝不能让 git 去做换行转换（会直接损坏文件）
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary
+*.pptx binary
+*.xlsx binary
+*.docx binary

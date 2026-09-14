@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>规则资产与参数基线（MVP v0.1） · 智美医美顾问设计文档</title>
+<style>
+:root{--ink:#19344a;--muted:#586d7b;--line:#d7e1e7;--accent:#226b62;--bg:#f3f6f8;--code:#f7f9fb}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif}
+a{color:#1f6f8b}
+.topbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;padding:12px 28px;background:#fff;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;line-height:1.3}
+.brand .eyebrow{font:11px/1.4 Consolas,monospace;color:var(--accent);letter-spacing:1.5px}
+.brand b{font-size:15px}
+.topbar nav{display:flex;flex-wrap:wrap;gap:6px}
+.topbar nav a{border:1px solid var(--line);border-radius:6px;padding:5px 11px;font-size:13px;text-decoration:none;color:var(--ink);background:#fff}
+.topbar nav a:hover{background:#e8f2f0;border-color:#75a69a}
+.topbar nav a.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.layout{display:grid;grid-template-columns:272px minmax(0,1fr);gap:26px;max-width:1560px;margin:0 auto;padding:26px 28px 60px}
+.toc{position:sticky;top:74px;align-self:start;max-height:calc(100vh - 96px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 14px}
+.toc b{display:block;font-size:12px;color:var(--muted);letter-spacing:1px;margin-bottom:8px}
+.toc ul{list-style:none;margin:0;padding:0}
+.toc li{margin:3px 0;font-size:13px;line-height:1.5}
+.toc li.l3{padding-left:14px;font-size:12.5px}
+.toc a{color:var(--muted);text-decoration:none;display:block;padding:2px 0}
+.toc a:hover{color:var(--accent)}
+.doc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:30px 38px 44px;min-width:0}
+.doc h1{font-size:29px;letter-spacing:-.5px;margin:0 0 10px;line-height:1.35}
+.doc h2{font-size:22px;margin:36px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+.doc h2:first-of-type{border-top:0;padding-top:0}
+.doc h3{font-size:17px;margin:26px 0 8px}
+.doc h4{font-size:15px;margin:20px 0 6px;color:#2c4a5e}
+.doc p{margin:9px 0}
+.doc ul,.doc ol{margin:9px 0;padding-left:24px}
+.doc li{margin:4px 0}
+.doc code{font-family:Consolas,"Courier New",monospace;font-size:12.5px;background:#eef2f5;padding:1px 5px;border-radius:4px;color:#2c4f6b}
+.doc pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow:auto;margin:12px 0}
+.doc pre code{background:none;padding:0;font-size:12.5px;line-height:1.7;color:#243b4a;white-space:pre}
+.doc blockquote{margin:12px 0;padding:12px 16px;background:#e8f2f0;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;color:#315a58}
+.doc blockquote p{margin:5px 0}
+.doc blockquote ol,.doc blockquote ul{padding-left:20px}
+.doc hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+.tw{overflow:auto;border:1px solid var(--line);border-radius:10px;margin:14px 0}
+.doc table{width:100%;border-collapse:collapse;font-size:13px}
+.doc th,.doc td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+.doc th{background:#f3f6f8;font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+.doc td code{font-size:12px;white-space:normal;word-break:break-word}
+footer{max-width:1560px;margin:0 auto;padding:0 28px 44px;color:var(--muted);font-size:12px}
+@media(max-width:1080px){.layout{grid-template-columns:1fr}.toc{position:static;max-height:none}.doc{padding:22px 20px 32px}}
+@media print{.topbar,.toc{display:none}.layout{display:block;padding:0}.doc{border:0;padding:0}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="eyebrow">ZHIMEI / DESIGN DOCS</span><b>智美医美顾问 · 设计文档</b></div><nav><a href="langgraph-v1.html">架构总览</a><a href="arch-pseudocode.html">伪代码讲解</a><a href="arch-supervisor.html">总控与意图</a><a href="config-rules.html" class="active">规则与参数</a><a href="data-model.html">数据模型</a><a href="ops-console.html">运营后台</a></nav></header>
+<div class="layout"><aside class="toc"><b>本页目录</b><ul><li class="l2"><a href="#1-紧急信号词表-v01">1. 紧急信号词表 v0.1</a></li><li class="l3"><a href="#11-分级与动作">1.1 分级与动作</a></li><li class="l3"><a href="#12-p0-词表按症状簇组织">1.2 P0 词表（按症状簇组织）</a></li><li class="l3"><a href="#13-p1-词表优先接管">1.3 P1 词表（优先接管）</a></li><li class="l3"><a href="#14-p2-标签关注不升级">1.4 P2 标签（关注，不升级）</a></li><li class="l3"><a href="#15-判定规则这一节比词表更重要">1.5 判定规则（这一节比词表更重要）</a></li><li class="l3"><a href="#16-误报回流">1.6 误报回流</a></li><li class="l2"><a href="#2-高风险标签清单-v01">2. 高风险标签清单 v0.1</a></li><li class="l3"><a href="#21-标签表">2.1 标签表</a></li><li class="l3"><a href="#22-升级escalate触发组合">2.2 升级（escalate）触发组合</a></li><li class="l2"><a href="#3-硬性阻断规则编号表-v01">3. 硬性阻断规则编号表 v0.1</a></li><li class="l3"><a href="#31-规则表">3.1 规则表</a></li><li class="l3"><a href="#32-block-与-revise-的边界">3.2 <code>block</code> 与 <code>revise</code> 的边界</a></li><li class="l3"><a href="#33-重复命中升级规则">3.3 重复命中升级规则</a></li><li class="l2"><a href="#4-澄清策略">4. 澄清策略</a></li><li class="l3"><a href="#41-什么时候追问">4.1 什么时候追问</a></li><li class="l3"><a href="#42-追问模板库按缺失类型都是封闭式">4.2 追问模板库（按缺失类型，都是封闭式）</a></li><li class="l3"><a href="#43-上限与兜底">4.3 上限与兜底</a></li><li class="l2"><a href="#5-业务参数基线三档选项">5. 业务参数基线：三档选项</a></li><li class="l3"><a href="#51-循环与预算">5.1 循环与预算</a></li><li class="l3"><a href="#52-时效">5.2 时效</a></li><li class="l3"><a href="#53-超时与并发">5.3 超时与并发</a></li><li class="l3"><a href="#54-检索">5.4 检索</a></li><li class="l3"><a href="#55-转人工与上下文">5.5 转人工与上下文</a></li><li class="l2"><a href="#6-规则版本化与生效约定">6. 规则版本化与生效约定</a></li><li class="l2"><a href="#7-下一步需要你决定的">7. 下一步（需要你决定的）</a></li></ul></aside><main class="doc"><h1 id="规则资产与参数基线mvp-v01">规则资产与参数基线（MVP v0.1）</h1>
+<blockquote><p><strong>使用说明</strong><br>本文是<strong>可执行的配置草稿</strong>，不是最终合规文本。落地时应当：</p>
+<ol><li>词表与标签清单<strong>必须经医学顾问与法务审定</strong>后才能上线；</li><li>全部内容以<strong>数据表</strong>形式落库（见 <code>data-model.md</code> 的 <code>rule_registry</code> / <code>emergency_lexicon</code>），<br>而不是硬编码在代码里 —— 规则要能热更新、能版本回滚、能进审计；</li><li>每次修改都产生新版本号，审计记录里保留<strong>命中的规则编号与版本</strong>。</li></ol>
+<p>MVP 阶段知识库内容可以暂缓，但<strong>规则资产不能暂缓</strong> —— 它是风险审查子图的判定依据。</p></blockquote>
+<hr>
+<h2 id="1-紧急信号词表-v01">1. 紧急信号词表 v0.1</h2>
+<h3 id="11-分级与动作">1.1 分级与动作</h3>
+<div class="tw"><table><thead><tr><th>等级</th><th>含义</th><th>系统动作</th><th>人工 SLA</th></tr></thead><tbody><tr><td><strong>P0</strong></td><td>可能危及生命或视力的急症信号</td><td>立即发<strong>预审模板</strong>风险提示 + 立即创建工单（值班医师）+ 会话标记 <code>emergency</code></td><td>60 秒内响应</td></tr><tr><td><strong>P1</strong></td><td>需要优先处理，但不构成即刻危险</td><td>创建工单（普通客服 → 可升级医师）+ 正常回复中带"建议尽快联系医生"</td><td>10 分钟内响应</td></tr><tr><td><strong>P2</strong></td><td>关注类，不升级</td><td>只打标签，写进画像与工单备注</td><td>不强制</td></tr></tbody></table></div>
+<blockquote><p>判定原则：<strong>宁可误报，不可漏报</strong>。误报代价是多一次人工确认，漏报代价可能是医疗事故。</p></blockquote>
+<h3 id="12-p0-词表按症状簇组织">1.2 P0 词表（按症状簇组织）</h3>
+<div class="tw"><table><thead><tr><th>簇</th><th>用户自述短语（示例，需扩充同义词）</th><th>为什么是 P0</th></tr></thead><tbody><tr><td>视力</td><td>看不见、视力模糊、视力下降、突然看不清、视野缺损、眼前发黑、黑影飘、重影、复视、眼球疼、眼痛</td><td>面部注射后出现视力症状是<strong>血管栓塞</strong>的典型表现，是最危急的医美并发症之一</td></tr><tr><td>呼吸 / 过敏</td><td>呼吸困难、喘不上气、憋气、喉咙发紧、喉头水肿、嘴唇肿、舌头发麻、全身起疹、风团、过敏性休克</td><td>过敏性休克可在数分钟内进展</td></tr><tr><td>循环 / 神经</td><td>胸痛、胸闷、心悸、心跳很快、晕厥、晕倒、意识模糊、叫不醒、抽搐、口角歪斜、面部歪、半身无力、说话不清、手脚发麻</td><td>栓塞 / 神经损伤信号</td></tr><tr><td>皮肤坏死</td><td>皮肤发白、发紫、花斑、皮肤发凉、剧烈疼痛、疼得受不了、水疱、起泡、发黑、黑痂</td><td>填充物压迫血管导致皮肤坏死的前兆</td></tr><tr><td>出血</td><td>出血不止、一直流血、大量出血、伤口裂开、血肿变大</td><td>需即时止血处理</td></tr><tr><td>感染危象</td><td>高烧、高热、寒战、打冷战、化脓、脓性分泌物、红肿扩散</td><td>全身感染风险</td></tr><tr><td>心理危机</td><td>想死、不想活、自杀、结束生命、活不下去</td><td>自伤风险，必须人工介入</td></tr><tr><td>就医意图</td><td>要去医院、叫救护车、120、急诊</td><td>用户已自主判断为急症，必须立即响应</td></tr></tbody></table></div>
+<h3 id="13-p1-词表优先接管">1.3 P1 词表（优先接管）</h3>
+<div class="tw"><table><thead><tr><th>簇</th><th>短语示例</th></tr></thead><tbody><tr><td>术后异常（不紧急）</td><td>持续剧痛超过 3 天、明显不对称、局部硬块、红肿不退、低热、淤青范围扩大、麻木不退</td></tr><tr><td>用药相关</td><td>自己吃了药不舒服、想加大剂量、能不能吃点消炎药</td></tr><tr><td>争议与投诉</td><td>退款、退费、投诉、曝光、律师、起诉、315、卫健委、医调委、找媒体</td></tr><tr><td>特殊人群</td><td>怀孕、备孕、哺乳期、未成年、糖尿病、凝血问题、免疫疾病、疤痕体质</td></tr><tr><td>情绪与关系</td><td>情绪激动、威胁、要说法、已经投诉过</td></tr></tbody></table></div>
+<h3 id="14-p2-标签关注不升级">1.4 P2 标签（关注，不升级）</h3>
+<p>效果不满意、担心、焦虑、反复追问同一问题（&gt;4 次）、询问其他机构、比价、要求看案例。</p>
+<h3 id="15-判定规则这一节比词表更重要">1.5 判定规则（这一节比词表更重要）</h3>
+<p>只做关键词匹配会大量误报。必须带上下面四条规则：</p>
+<div class="tw"><table><thead><tr><th>#</th><th>规则</th><th>命中</th><th>不命中</th></tr></thead><tbody><tr><td>1</td><td><strong>第一人称 + 现在时/近期自述</strong>才算症状</td><td>"我<strong>现在</strong>眼睛看不清"、"昨天做完今天脸发白"</td><td>——</td></tr><tr><td>2</td><td><strong>询问风险 ≠ 出现症状</strong></td><td>——</td><td>"热玛吉会<strong>导致</strong>失明吗？"、"<strong>网上说</strong>会失明"、"<strong>会不会</strong>烂脸" → 走普通科普路径</td></tr><tr><td>3</td><td><strong>否定不算</strong></td><td>——</td><td>"我<strong>没有</strong>视力模糊"、"<strong>不</strong>疼了"</td></tr><tr><td>4</td><td><strong>第三人称 / 假设不算</strong></td><td>——</td><td>"我<strong>朋友</strong>做完眼睛看不清"（可打 P2 + 建议其就医）、"<strong>如果</strong>失明了怎么办"</td></tr></tbody></table></div>
+<p><strong>共现要求</strong>：泛词（疼 / 肿 / 红 / 麻）<strong>不能单独触发</strong>，必须与部位或程度或时间共现：</p>
+<ul><li>"有点疼" → 不触发</li><li>"疼得受不了" → P1</li><li>"填充的地方发白，还特别疼" → <strong>P0</strong>（部位 + 颜色异常 + 剧烈疼痛三要素）</li></ul>
+<p><strong>时间窗只用于降噪，不作为排除依据</strong>：术后 30 天内的 P1 症状可升级；P0 <strong>不看时间</strong>。</p>
+<p><strong>实现建议</strong>：规则层用 Aho-Corasick 多模匹配 + 正则（处理否定与疑问句式）+ 共现窗口；<br>模型（<code>emergency_triage</code>）只做<strong>规则未命中时的兜底</strong>，且只回答"是否升级"，<br><strong>不做任何医学判断</strong>。</p>
+<h3 id="16-误报回流">1.6 误报回流</h3>
+<p>运营面板必须提供"<strong>标记误报</strong>"按钮（见 <code>ops-console.md</code>）。被标记的样本进入调优队列，<br>每条记录携带：原始消息、命中的规则编号与版本、坐席判断。<br><strong>没有这条回流，词表永远调不准。</strong></p>
+<hr>
+<h2 id="2-高风险标签清单-v01">2. 高风险标签清单 v0.1</h2>
+<p>用于 <code>escalate</code> 的升级判定（见 <code>langgraph-pseudocode.md</code> §6.2）。</p>
+<h3 id="21-标签表">2.1 标签表</h3>
+<div class="tw"><table><thead><tr><th>等级</th><th>标签</th><th>触发条件</th><th>建议动作</th></tr></thead><tbody><tr><td>HIGH</td><td><code>complication_signal</code></td><td>提到并发症、异常症状、术后不良反应</td><td>转人工（医师）</td></tr><tr><td>HIGH</td><td><code>diagnosis_request</code></td><td>要求判断"我这是什么情况/是不是正常"</td><td>revise + 转人工</td></tr><tr><td>HIGH</td><td><code>medication_advice</code></td><td>涉及用药、剂量、停药、消炎药</td><td>revise + 转人工</td></tr><tr><td>HIGH</td><td><code>refund_dispute</code></td><td>退费、赔偿、投诉、法律途径</td><td>转人工</td></tr><tr><td>HIGH</td><td><code>legal_threat</code></td><td>律师、起诉、曝光、监管部门</td><td>转人工</td></tr><tr><td>HIGH</td><td><code>minor</code></td><td>未成年人本人或代问</td><td>转人工</td></tr><tr><td>HIGH</td><td><code>pregnant_or_lactating</code></td><td>怀孕、备孕、哺乳期</td><td>revise + 建议面诊</td></tr><tr><td>HIGH</td><td><code>comorbidity</code></td><td>糖尿病、凝血、免疫、心脏疾病等基础病</td><td>revise + 建议面诊</td></tr><tr><td>HIGH</td><td><code>unauthorized_provider</code></td><td>推荐无资质医生 / 未获批设备 / 超范围项目</td><td><strong>block</strong></td></tr><tr><td>HIGH</td><td><code>privacy_leak</code></td><td>回显身份证、完整手机号、病历原文、未授权图片</td><td><strong>block</strong></td></tr><tr><td>HIGH</td><td><code>self_harm</code></td><td>自伤、自杀表达</td><td>紧急路径 + 转人工</td></tr><tr><td>HIGH</td><td><code>professional_claim</code></td><td>以医生口吻给出结论性判断</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>efficacy_guarantee</code></td><td>保证、根治、一次见效、永久</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>absolute_wording</code></td><td>最、第一、唯一、全网最低</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>comparative_ad</code></td><td>与其他机构/项目做优劣比较</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>anxiety_induce</code></td><td>制造焦虑促成下单</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>case_evidence</code></td><td>以案例/患者形象作效果证明</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>missing_disclaimer</code></td><td>缺面诊提示或免责说明</td><td>revise</td></tr><tr><td>MEDIUM</td><td><code>vague_price</code></td><td>模糊价格、口头报价</td><td>revise（价格只能来自业务系统）</td></tr><tr><td>LOW</td><td><code>general_education</code></td><td>一般原理性科普</td><td>pass</td></tr></tbody></table></div>
+<h3 id="22-升级escalate触发组合">2.2 升级（escalate）触发组合</h3>
+<pre><code>命中任一 HIGH 标签                    → escalate
+命中 ≥ 2 个 MEDIUM 标签               → escalate
+三位专家对同一句判定不一致             → escalate（意见冲突）
+最低 confidence &lt; 0.6                 → escalate（模型自报不确定）</code></pre>
+<p><code>escalate</code> 后由 <code>escalation</code> 角色复核；<strong>最终等级仍由决策表给</strong>，模型只提供证据与建议。</p>
+<hr>
+<h2 id="3-硬性阻断规则编号表-v01">3. 硬性阻断规则编号表 v0.1</h2>
+<h3 id="31-规则表">3.1 规则表</h3>
+<div class="tw"><table><thead><tr><th>rule_id</th><th>类别</th><th>判定</th><th>动作</th><th>依据（法务需补条款号）</th></tr></thead><tbody><tr><td>AD-001</td><td>广告</td><td>疗效承诺：保证、根治、一次见效、永久有效</td><td>revise</td><td>广告法（医疗广告不得含功效断言）</td></tr><tr><td>AD-002</td><td>广告</td><td>绝对化用语：最好、第一、唯一、全网最低</td><td>revise</td><td>广告法（绝对化用语）</td></tr><tr><td>AD-003</td><td>广告</td><td>无来源数据：成功率 98%、上万例、有效率</td><td>revise</td><td>广告法（数据须有来源）</td></tr><tr><td>MED-001</td><td>医疗</td><td>输出诊断结论（"你这是××"）</td><td>revise</td><td>医疗广告管理办法；执业边界</td></tr><tr><td>MED-002</td><td>医疗</td><td>给出用药或剂量建议</td><td>revise</td><td>同上</td></tr><tr><td>MED-003</td><td>医疗</td><td>判断症状严重程度（"没事/很严重"）</td><td>revise</td><td>同上</td></tr><tr><td>PRIV-001</td><td>隐私</td><td>回显身份证、完整手机号、病历原文</td><td><strong>block</strong></td><td>个人信息保护法</td></tr><tr><td>PRIV-002</td><td>隐私</td><td>使用未授权图片 / 超授权范围使用数据</td><td><strong>block</strong></td><td>个人信息保护法</td></tr><tr><td>OPS-001</td><td>操作</td><td>同一 <code>idempotency_key</code> 重复执行</td><td><strong>block</strong></td><td>业务风控</td></tr><tr><td>OPS-002</td><td>操作</td><td>未经用户明确确认即执行</td><td><strong>block</strong></td><td>业务风控</td></tr><tr><td>OPS-003</td><td>操作</td><td>前置条件不成立（已取消订单改约、无档期仍预约）</td><td><strong>block</strong></td><td>业务规则</td></tr><tr><td>OPS-004</td><td>操作</td><td>越权操作（非本人订单、无归属关系）</td><td><strong>block</strong></td><td>权限规则</td></tr><tr><td>LEG-001</td><td>合规</td><td>篡改/删除医疗记录</td><td><strong>block</strong></td><td>病历管理规定</td></tr><tr><td>LEG-002</td><td>合规</td><td>推荐无资质医生或未获批设备</td><td><strong>block</strong></td><td>医疗机构管理条例</td></tr></tbody></table></div>
+<h3 id="32-block-与-revise-的边界">3.2 <code>block</code> 与 <code>revise</code> 的边界</h3>
+<p>判据一句话：<strong>改文案也解决不了 → block；改文案能解决 → revise。</strong></p>
+<ul><li>AD-001 到 MED-003 属于"话说得越界"，改写即可合规 → <code>revise</code></li><li>PRIV / OPS / LEG 属于"这件事本身不能做" → <code>block</code>，且 <code>block</code> 不产生任何业务出站内容</li></ul>
+<h3 id="33-重复命中升级规则">3.3 重复命中升级规则</h3>
+<p><strong>同一 rule_id 在复审中重复命中 → 升级为 <code>block</code>。</strong></p>
+<p>理由：说明生成侧对这条边界的理解是错的，继续退回改写只会浪费预算并可能换个说法再犯。<br>实现：<code>hard_rule_hits</code> 里按 <code>rule_id</code> 聚合，命中次数 ≥ 2 且跨轮次 → 直接 <code>block</code>。</p>
+<hr>
+<h2 id="4-澄清策略">4. 澄清策略</h2>
+<h3 id="41-什么时候追问">4.1 什么时候追问</h3>
+<p><strong>只有"缺失信息会实质影响回答"时才追问</strong>，一般性科普不追问。</p>
+<div class="tw"><table><thead><tr><th>用户问</th><th>追问吗</th><th>原因</th></tr></thead><tbody><tr><td>"热玛吉和超声炮有什么区别？"</td><td>否</td><td>一般科普，直接讲原理/流程/恢复期差异</td></tr><tr><td>"我适合做哪个？"</td><td>是</td><td>答案取决于部位、恢复期、既往史</td></tr><tr><td>"这个多少钱？"</td><td>是</td><td>缺项目名，价格无法查询</td></tr><tr><td>"术后能运动吗？"</td><td>看情况</td><td>缺项目与术后天数；若用户已在本会话说过项目，则不追问</td></tr></tbody></table></div>
+<h3 id="42-追问模板库按缺失类型都是封闭式">4.2 追问模板库（按缺失类型，都是封闭式）</h3>
+<div class="tw"><table><thead><tr><th>缺失类型</th><th>模板</th></tr></thead><tbody><tr><td>缺项目名</td><td>"想先确认您说的是哪个项目？可以告诉我是<strong>热玛吉 / 超声炮 / 水光针</strong>中的哪一个，或直接说项目名称。"</td></tr><tr><td>缺部位</td><td>"您主要想改善的是<strong>面部紧致</strong>、<strong>下颌轮廓</strong>，还是<strong>其他部位</strong>？"</td></tr><tr><td>缺恢复期偏好</td><td>"您更希望<strong>当天可正常上班</strong>，还是<strong>可以接受 3–7 天的轻微红肿</strong>？"</td></tr><tr><td>缺既往史</td><td>"以前做过同类项目吗（如<strong>热玛吉 / 超声炮 / 线雕</strong>）？"</td></tr><tr><td>缺术后天数</td><td>"方便告诉我是<strong>术后第几天</strong>吗？不同阶段的护理建议不一样。"</td></tr><tr><td>缺门店</td><td>"您想咨询的是<strong>浦东店</strong>还是<strong>静安店</strong>？"</td></tr><tr><td>完全无法定位（超预算兜底）</td><td>不再追问，直接给一般性说明 + 建议面诊，或转人工</td></tr></tbody></table></div>
+<p>模板设计要求：<strong>一次最多 2–3 问、给选项、不引导答案、不带诊断性质、结尾必带面诊提示。</strong></p>
+<h3 id="43-上限与兜底">4.3 上限与兜底</h3>
+<p><code>MAX_CLARIFY = 2</code>（连续追问两次不收敛即兜底）。完整规则见 <code>langgraph-pseudocode.md</code> §3.4。</p>
+<hr>
+<h2 id="5-业务参数基线三档选项">5. 业务参数基线：三档选项</h2>
+<p>三档预设：<strong>演示版</strong>（最省成本、最快收敛）/ <strong>稳妥版</strong>（推荐，MVP 默认）/ <strong>严格版</strong>（合规优先）。<br>你选一档作为起点，后续按指标微调。</p>
+<h3 id="51-循环与预算">5.1 循环与预算</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>演示版</th><th><strong>稳妥版（推荐）</strong></th><th>严格版</th><th>说明</th></tr></thead><tbody><tr><td><code>MAX_REVISION</code></td><td>1</td><td><strong>2</strong></td><td>3</td><td>审查退回修订的次数上限；超限转人工</td></tr><tr><td><code>MAX_CLARIFY</code></td><td>1</td><td><strong>2</strong></td><td>2</td><td>连续追问上限；超限降级兜底</td></tr><tr><td><code>KB_MAX_VERIFY_LOOP</code></td><td>2</td><td><strong>3</strong></td><td>3</td><td>子图内部"生成↔核对"自环上限；超限缩小回答范围。<strong>只对硬问题（<code>unsupported</code>）生效</strong>：<code>overstated</code> 这类"有依据但说得太满"的软问题最多修 1 轮后放行 —— 否则会把一份合格答案越改越空、最后丢给 <code>kb_limit</code></td></tr><tr><td><code>MAX_RECURSION_LIMIT</code></td><td>30</td><td><strong>40</strong></td><td>50</td><td>图的步数上限，必须显式设置</td></tr></tbody></table></div>
+<h3 id="52-时效">5.2 时效</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>演示版</th><th><strong>稳妥版（推荐）</strong></th><th>严格版</th><th>说明</th></tr></thead><tbody><tr><td><code>TOKEN_TTL</code></td><td>10 min</td><td><strong>30 min</strong></td><td>15 min</td><td>放行凭据有效期；越短越安全但重试率越高</td></tr><tr><td><code>PLAN_EXPIRE</code></td><td>15 min</td><td><strong>30 min</strong></td><td>60 min</td><td>等用户确认的挂起时长；超时作废方案</td></tr><tr><td><code>SESSION_IDLE</code></td><td>30 min</td><td><strong>2 h</strong></td><td>2 h</td><td>会话空闲多久后归档图状态</td></tr></tbody></table></div>
+<h3 id="53-超时与并发">5.3 超时与并发</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>演示版</th><th><strong>稳妥版（推荐）</strong></th><th>严格版</th><th>说明</th></tr></thead><tbody><tr><td>模型超时·理解类</td><td>6 s</td><td><strong>8 s</strong></td><td>10 s</td><td>分类、拆解、改写</td></tr><tr><td>模型超时·生成类</td><td>20 s</td><td><strong>30 s</strong></td><td>40 s</td><td>草稿、结果文案</td></tr><tr><td>模型超时·审查类</td><td>15 s</td><td><strong>20 s</strong></td><td>25 s</td><td>三位专家 + 复核</td></tr><tr><td><code>EMBED_CONCURRENCY</code></td><td>2</td><td><strong>4</strong></td><td>8</td><td>BGE-M3 并发（配合 <code>torch.set_num_threads(1)</code>）</td></tr><tr><td><code>RERANK_CONCURRENCY</code></td><td>2</td><td><strong>4</strong></td><td>8</td><td>精排并发</td></tr></tbody></table></div>
+<blockquote><p>审查类超时的降级<strong>绝不能是 pass</strong>，默认降级为 <code>human</code>。</p></blockquote>
+<h3 id="54-检索">5.4 检索</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>演示版</th><th><strong>稳妥版（推荐）</strong></th><th>严格版</th><th>说明</th></tr></thead><tbody><tr><td><code>RECALL_K</code>（每路）</td><td>30</td><td><strong>40</strong></td><td>60</td><td>dense、sparse 各召回数量，RRF 融合</td></tr><tr><td><code>RERANK_TOP_K</code></td><td>6</td><td><strong>8</strong></td><td>12</td><td>精排后保留数量</td></tr><tr><td><code>MAX_EVIDENCE</code></td><td>4</td><td><strong>6</strong></td><td>8</td><td>最终送入生成的证据条数</td></tr><tr><td><code>MIN_RERANK</code></td><td>0.20</td><td><strong>0.30</strong></td><td>0.35</td><td>低于阈值视为证据不足 → <code>kb_limit</code></td></tr></tbody></table></div>
+<h3 id="55-转人工与上下文">5.5 转人工与上下文</h3>
+<div class="tw"><table><thead><tr><th>参数</th><th>演示版</th><th><strong>稳妥版（推荐）</strong></th><th>严格版</th><th>说明</th></tr></thead><tbody><tr><td>携带对话轮数</td><td>3</td><td><strong>5</strong></td><td>5</td><td>工单附带的最近对话（蓝图要求 5 轮）</td></tr><tr><td>画像摘要字数</td><td>200</td><td><strong>400</strong></td><td>400</td><td>工单附带的画像摘要上限</td></tr><tr><td>P0 响应 SLA</td><td>30 s</td><td><strong>60 s</strong></td><td>30 s</td><td>超时升级提醒</td></tr><tr><td>P1 响应 SLA</td><td>5 min</td><td><strong>10 min</strong></td><td>5 min</td><td>同上</td></tr><tr><td>工单自动关闭</td><td>24 h</td><td><strong>48 h</strong></td><td>24 h</td><td>无处理则自动关闭并记录</td></tr></tbody></table></div>
+<hr>
+<h2 id="6-规则版本化与生效约定">6. 规则版本化与生效约定</h2>
+<ol><li><strong>编号格式</strong>：<code>类别-序号</code>，如 <code>AD-001</code>、<code>PRIV-002</code>、<code>OPS-003</code>。编号一旦发布<strong>不复用、不改含义</strong>。</li><li><strong>版本号</strong>：<code>v&lt;主&gt;.&lt;次&gt;</code>，主版本表示判定逻辑变化，次版本表示增删词条。</li><li><strong>每次命中都记录</strong>：<code>rule_id</code> + <code>version</code> + 命中位置（原文片段）+ 命中时间 → 写进 <code>review_audit.hard_rule_hits</code>。</li><li><strong>回归测试集</strong>：每改一次词表或规则，跑一遍固定的<strong>误报/漏报样本集</strong>（至少覆盖 §1.5 的四条判定规则）。</li><li><strong>生效方式</strong>：MVP 阶段用数据库表 + 应用内缓存（60 秒刷新）；不做需要重启的配置。</li></ol>
+<blockquote><p>这套约定看着"重"，但它正是面试里能体现工程成熟度的地方：<br><strong>规则可追溯、可回滚、可评测</strong>，而不是散落在代码里的 if-else。</p></blockquote>
+<hr>
+<h2 id="7-下一步需要你决定的">7. 下一步（需要你决定的）</h2>
+<div class="tw"><table><thead><tr><th>#</th><th>事项</th><th>建议</th></tr></thead><tbody><tr><td>1</td><td>参数选哪一档</td><td>先按<strong>稳妥版</strong>跑通，再用指标微调</td></tr><tr><td>2</td><td>紧急词表由谁审定</td><td>医学顾问 + 法务各过一遍；MVP 演示可以先用本稿，但要在演示时说明"待审定"</td></tr><tr><td>3</td><td>争议类词（退款/投诉/律师）是否一律转人工</td><td>建议是；这类问题 AI 回答的期望收益远低于风险</td></tr><tr><td>4</td><td>P2 类是否需要进画像</td><td>建议进，但明确标注来源与时间，且遵守保留期限</td></tr></tbody></table></div></main></div>
+<footer>由 <code>build-docs.cjs</code> 从 Markdown 生成 —— 请修改源文件后重新执行，不要手改本页。图与源码自检：<code>node check-mermaid.cjs</code>。</footer>
+</body>
+</html>

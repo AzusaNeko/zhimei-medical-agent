@@ -1,0 +1,122 @@
+%% 智美医美顾问 · 多 Agent 主图（LangGraph 对齐版 v2 · 排版重排）
+%% 阅读顺序（自上而下）：
+%%   L0 入口与调度 → L1 七路草稿产出 → 聚合与守门 → L3 输出与执行 → 出口层
+%%   修订回路与执行链在守门层下方左右并行，最后由出口层收敛。
+%% 命名约定：节点 id 即 add_node 名称；菱形 = add_conditional_edges 的路由点；
+%%          出边标签 = 路由函数返回值；interrupt 节点依赖 checkpointer。
+%% 子图内部结构见 langgraph-risk-gate.mmd 与 langgraph-knowledge.mmd。
+%% 预算上限（都落在路由条件里，不新增节点）：
+%%   clarify_count 达到 MAX_CLARIFY → 有可用槽位则走 k_agent 给一般性说明，否则 human_handoff
+%%   revision_count 超过 MAX_REVISION → human_handoff
+
+flowchart TB
+  U(["用户输入<br/>文本 / 图片 / 文档"])
+
+  subgraph L0["入口与调度层"]
+    normalize["输入标准化与授权校验<br/>normalize"]
+    emergency_screen{"命中紧急信号？<br/>emergency_screen"}
+    classify["意图识别与槽位抽取<br/>classify"]
+    dispatch{"按意图分派<br/>dispatch"}
+  end
+
+  subgraph L1["草稿产出层 · 七路并行，全部汇入 aggregate"]
+    k_agent["知识科普<br/>k_agent"]
+    r_agent["项目推荐<br/>r_agent"]
+    c_agent["资质与门店查询<br/>c_agent"]
+    b_agent["预约管理<br/>b_agent"]
+    p_agent["术后护理与随访<br/>p_agent"]
+    clarify["生成澄清问题<br/>clarify"]
+    emergency_draft["紧急提示与接管请求<br/>emergency_draft"]
+  end
+
+  aggregate["聚合待审对象：草稿 / 操作请求<br/>aggregate"]
+  risk_gate{"风险审查子图 · 必经关卡<br/>risk_gate"}
+
+  output_type{"输出类型<br/>output_type"}
+  await_confirm["等待用户明确确认<br/>await_confirm · interrupt"]
+  execute_op["幂等执行已审操作<br/>execute_op"]
+  receipt["生成真实执行结果回复<br/>receipt"]
+  recheck["执行结果回复复审<br/>recheck"]
+  final_check{"结果回复通过？<br/>final_check"}
+
+  feedback["记录修改意见与复审次数<br/>feedback"]
+  retry_check{"复审少于 2 次？<br/>retry_check"}
+  revise["定向修订<br/>revise"]
+  plan_void["作废方案并生成通用回复<br/>plan_void"]
+
+  subgraph EXITS["出口层 · 所有出站内容都必须持有放行凭据"]
+    send["发送已审查回复<br/>send · 校验 release_token"]
+    human_handoff["创建人工接管工单<br/>human_handoff"]
+    audit_block["记录规则编号并终止<br/>audit_block"]
+  end
+
+  %% ---------- 入口与分派 ----------
+  U --> normalize
+  normalize --> emergency_screen
+  emergency_screen -->|命中紧急信号| emergency_draft
+  emergency_screen -->|未命中| classify
+  classify --> dispatch
+  dispatch -->|科普咨询| k_agent
+  dispatch -->|项目推荐| r_agent
+  dispatch -->|门店资质| c_agent
+  dispatch -->|预约改约| b_agent
+  dispatch -->|术后护理| p_agent
+  dispatch -->|意图不明确| clarify
+
+  %% ---------- 七路扇入：唯一汇聚点 ----------
+  k_agent --> aggregate
+  r_agent --> aggregate
+  c_agent --> aggregate
+  b_agent --> aggregate
+  p_agent --> aggregate
+  clarify --> aggregate
+  emergency_draft --> aggregate
+
+  %% ---------- 必经关卡 ----------
+  aggregate --> risk_gate
+
+  %% ---------- 五档出口 ----------
+  risk_gate -->|pass 通过| output_type
+  risk_gate -->|revise 需修改| feedback
+  risk_gate -->|need_info 资料不全| send
+  risk_gate -->|block 硬性阻断| audit_block
+  risk_gate -->|human 高风险或紧急| human_handoff
+
+  %% ---------- 修订回路 ----------
+  feedback --> retry_check
+  retry_check -->|是：计数 +1| revise
+  retry_check -->|否：复审超限| human_handoff
+  revise -.->|按 state.origin_agent 回到原专业 Agent| L1
+
+  %% ---------- 输出与执行闭环 ----------
+  output_type -->|回复| send
+  output_type -->|操作请求| await_confirm
+  await_confirm -->|用户明确确认| execute_op
+  await_confirm -->|否认或方案过期| plan_void
+  execute_op --> receipt
+  receipt --> recheck
+  recheck --> final_check
+  final_check -->|是| send
+  final_check -->|否| human_handoff
+  plan_void -.->|重新送审| aggregate
+
+  %% ---------- 样式 ----------
+  classDef ent fill:#e8f1fb,stroke:#4a7fb5,stroke-width:1.5px,color:#17405f;
+  classDef agt fill:#f1eaf9,stroke:#8264ad,stroke-width:1.5px,color:#492f6b;
+  classDef gt fill:#ffe3de,stroke:#c8493a,stroke-width:2.5px,color:#8a2a1e;
+  classDef rel fill:#e6f4ee,stroke:#3f8a72,stroke-width:1.5px,color:#1a5044;
+  classDef loop fill:#eef1f4,stroke:#6b7d8a,stroke-width:1.5px,color:#384a55;
+  classDef exit fill:#fff4dd,stroke:#b3862a,stroke-width:1.5px,color:#6d4c08;
+  classDef ext fill:#f4f6f8,stroke:#a9b8c2,stroke-dasharray:4 3,color:#4f6270;
+
+  class U ext;
+  class normalize,emergency_screen,classify,dispatch ent;
+  class k_agent,r_agent,c_agent,b_agent,p_agent,clarify,emergency_draft agt;
+  class aggregate,risk_gate gt;
+  class output_type,await_confirm,execute_op,receipt,recheck,final_check rel;
+  class feedback,retry_check,revise,plan_void loop;
+  class send,human_handoff,audit_block exit;
+
+  style L0 fill:#fbfcfe,stroke:#ccd9e4,stroke-width:1px
+  style L1 fill:#fcfbfe,stroke:#ddd2ec,stroke-width:1px
+  style EXITS fill:#fffdf6,stroke:#e6d6b0,stroke-width:1px

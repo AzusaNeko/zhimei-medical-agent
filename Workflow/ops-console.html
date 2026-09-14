@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人工接管与运营后台（MVP v0.1） · 智美医美顾问设计文档</title>
+<style>
+:root{--ink:#19344a;--muted:#586d7b;--line:#d7e1e7;--accent:#226b62;--bg:#f3f6f8;--code:#f7f9fb}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif}
+a{color:#1f6f8b}
+.topbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;padding:12px 28px;background:#fff;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;line-height:1.3}
+.brand .eyebrow{font:11px/1.4 Consolas,monospace;color:var(--accent);letter-spacing:1.5px}
+.brand b{font-size:15px}
+.topbar nav{display:flex;flex-wrap:wrap;gap:6px}
+.topbar nav a{border:1px solid var(--line);border-radius:6px;padding:5px 11px;font-size:13px;text-decoration:none;color:var(--ink);background:#fff}
+.topbar nav a:hover{background:#e8f2f0;border-color:#75a69a}
+.topbar nav a.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.layout{display:grid;grid-template-columns:272px minmax(0,1fr);gap:26px;max-width:1560px;margin:0 auto;padding:26px 28px 60px}
+.toc{position:sticky;top:74px;align-self:start;max-height:calc(100vh - 96px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 14px}
+.toc b{display:block;font-size:12px;color:var(--muted);letter-spacing:1px;margin-bottom:8px}
+.toc ul{list-style:none;margin:0;padding:0}
+.toc li{margin:3px 0;font-size:13px;line-height:1.5}
+.toc li.l3{padding-left:14px;font-size:12.5px}
+.toc a{color:var(--muted);text-decoration:none;display:block;padding:2px 0}
+.toc a:hover{color:var(--accent)}
+.doc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:30px 38px 44px;min-width:0}
+.doc h1{font-size:29px;letter-spacing:-.5px;margin:0 0 10px;line-height:1.35}
+.doc h2{font-size:22px;margin:36px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+.doc h2:first-of-type{border-top:0;padding-top:0}
+.doc h3{font-size:17px;margin:26px 0 8px}
+.doc h4{font-size:15px;margin:20px 0 6px;color:#2c4a5e}
+.doc p{margin:9px 0}
+.doc ul,.doc ol{margin:9px 0;padding-left:24px}
+.doc li{margin:4px 0}
+.doc code{font-family:Consolas,"Courier New",monospace;font-size:12.5px;background:#eef2f5;padding:1px 5px;border-radius:4px;color:#2c4f6b}
+.doc pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:16px 18px;overflow:auto;margin:12px 0}
+.doc pre code{background:none;padding:0;font-size:12.5px;line-height:1.7;color:#243b4a;white-space:pre}
+.doc blockquote{margin:12px 0;padding:12px 16px;background:#e8f2f0;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;color:#315a58}
+.doc blockquote p{margin:5px 0}
+.doc blockquote ol,.doc blockquote ul{padding-left:20px}
+.doc hr{border:0;border-top:1px solid var(--line);margin:26px 0}
+.tw{overflow:auto;border:1px solid var(--line);border-radius:10px;margin:14px 0}
+.doc table{width:100%;border-collapse:collapse;font-size:13px}
+.doc th,.doc td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+.doc th{background:#f3f6f8;font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+.doc td code{font-size:12px;white-space:normal;word-break:break-word}
+footer{max-width:1560px;margin:0 auto;padding:0 28px 44px;color:var(--muted);font-size:12px}
+@media(max-width:1080px){.layout{grid-template-columns:1fr}.toc{position:static;max-height:none}.doc{padding:22px 20px 32px}}
+@media print{.topbar,.toc{display:none}.layout{display:block;padding:0}.doc{border:0;padding:0}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="eyebrow">ZHIMEI / DESIGN DOCS</span><b>智美医美顾问 · 设计文档</b></div><nav><a href="langgraph-v1.html">架构总览</a><a href="arch-pseudocode.html">伪代码讲解</a><a href="arch-supervisor.html">总控与意图</a><a href="config-rules.html">规则与参数</a><a href="data-model.html">数据模型</a><a href="ops-console.html" class="active">运营后台</a></nav></header>
+<div class="layout"><aside class="toc"><b>本页目录</b><ul><li class="l2"><a href="#1-角色与权限">1. 角色与权限</a></li><li class="l2"><a href="#2-工单状态机">2. 工单状态机</a></li><li class="l3"><a href="#21-关键不变量">2.1 关键不变量</a></li><li class="l3"><a href="#22-接管后-ai-是否继续回复">2.2 接管后 AI 是否继续回复</a></li><li class="l2"><a href="#3-后端接口">3. 后端接口</a></li><li class="l3"><a href="#31-超时告警">3.1 超时告警</a></li><li class="l2"><a href="#4-前端页面结构">4. 前端页面结构</a></li><li class="l3"><a href="#41-视图一实时队列坐席默认页">4.1 视图一：实时队列（坐席默认页）</a></li><li class="l3"><a href="#42-视图二会话详情">4.2 视图二：会话详情</a></li><li class="l3"><a href="#43-视图三处置面板">4.3 视图三：处置面板</a></li><li class="l3"><a href="#44-视图四指标与规则调优">4.4 视图四：指标与规则调优</a></li><li class="l2"><a href="#5-坐席回复要不要过审">5. 坐席回复要不要过审？</a></li><li class="l2"><a href="#6-指标定义先定义清楚再谈优化">6. 指标定义（先定义清楚，再谈优化）</a></li><li class="l2"><a href="#7-值班与告警">7. 值班与告警</a></li><li class="l2"><a href="#8-与图的接口边界谁来写哪些字段">8. 与图的接口边界（谁来写哪些字段）</a></li><li class="l2"><a href="#9-mvp-可以砍掉的部分">9. MVP 可以砍掉的部分</a></li><li class="l2"><a href="#实现补充codeappops-已实现并验证">实现补充（<code>Code/app/ops/</code> 已实现并验证）</a></li><li class="l3"><a href="#落地情况">落地情况</a></li><li class="l3"><a href="#两处实测与设想不同">两处实测与设想不同</a></li><li class="l3"><a href="#报错的顺序也是设计的一部分">报错的顺序也是设计的一部分</a></li></ul></aside><main class="doc"><h1 id="人工接管与运营后台mvp-v01">人工接管与运营后台（MVP v0.1）</h1>
+<blockquote><p>目标：让"转人工"不是一个黑盒终点，而是<strong>有人接得住、接得及时、有记录、能回流调优</strong>的闭环。<br>表结构见 <code>data-model.md</code> 第 9 节；图侧接口是 <code>human_handoff</code> 节点。</p></blockquote>
+<hr>
+<h2 id="1-角色与权限">1. 角色与权限</h2>
+<div class="tw"><table><thead><tr><th>角色</th><th>看得到什么</th><th>能做什么</th><th>不能做什么</th></tr></thead><tbody><tr><td><code>service</code>（客服坐席）</td><td>工单队列、会话详情、画像摘要、风险报告</td><td>接管、回复、关闭、标记误报、升级给医师</td><td>看不到未脱敏的身份证/完整手机号；不能放行被 <code>block</code> 的内容</td></tr><tr><td><code>doctor</code>（值班医师）</td><td>同上 + 症状时间线、图片原件</td><td>处置医疗类工单、给出结论性回复、关闭</td><td>不能改规则、不能看其他门店数据</td></tr><tr><td><code>compliance</code>（合规）</td><td>全部审计、规则命中统计、误报样本</td><td>审阅审计、调整规则与词表（走发布流程）</td><td>不能直接给用户发消息</td></tr><tr><td><code>admin</code>（管理员）</td><td>全部</td><td>值班表、权限、参数配置</td><td>——</td></tr></tbody></table></div>
+<p><strong>两条硬规则</strong>（写进 API 层，不能只写在文档里）：</p>
+<ol><li><code>service</code> 角色的接口<strong>必须</strong>对手机号/身份证做脱敏后再返回，脱敏在服务端做，不在前端做。</li><li><strong>放行权限与回复权限分离</strong>：被 <code>block</code> 的内容任何人都不能直接发给用户，<br>要发只能走"合规复核 → 修改 → 重新送审"。</li></ol>
+<hr>
+<h2 id="2-工单状态机">2. 工单状态机</h2>
+<pre><code>                    ┌──────────────────────────────────────┐
+                    │                                      │
+  [图] human_handoff │                                      │
+        │            ▼                                      │
+        └──────►  open ──accept──► accepted ──► in_progress ─┴─► closed
+                   │                 │            │
+                   │                 │            └─escalate──► escalated ──► in_progress
+                   │                 │                              │
+                   └──auto_close─────┴──────────────────────────────┘
+                     （超时未接）</code></pre>
+<div class="tw"><table><thead><tr><th>状态</th><th>含义</th><th>可转移至</th></tr></thead><tbody><tr><td><code>open</code></td><td>工单已创建，等待坐席接单</td><td><code>accepted</code> / <code>closed</code>（超时自动关闭）</td></tr><tr><td><code>accepted</code></td><td><strong>坐席已接单</strong>（<code>accepted_at</code> 落库）</td><td><code>in_progress</code> / <code>escalated</code> / <code>closed</code></td></tr><tr><td><code>in_progress</code></td><td>正在与用户对话</td><td><code>escalated</code> / <code>closed</code></td></tr><tr><td><code>escalated</code></td><td>已升级给值班医师</td><td><code>in_progress</code> / <code>closed</code></td></tr><tr><td><code>closed</code></td><td>已结束（<code>close_reason</code> 必填）</td><td>可 <code>reopen</code>（用户再次追问时）</td></tr></tbody></table></div>
+<h3 id="21-关键不变量">2.1 关键不变量</h3>
+<blockquote><p><strong><code>accepted_at</code> 为空时，任何接口都不得向用户返回"人工已接入 / 客服马上联系您"。</strong></p></blockquote>
+<p>对应实现：<code>human_handoff</code> 节点发出的文案只能是"<strong>已为您转接人工，请稍候</strong>"；<br>只有工单 <code>accepted</code> 之后，坐席侧（或系统）才能发"客服 xxx 已接入"。</p>
+<p>MVP 的一条简化：<code>human_handoff</code> 节点只发"已转接，请稍候"这一句（已审模板），<br>后续所有消息都由坐席通过运营后台发出，<strong>不再经过图</strong>。</p>
+<h3 id="22-接管后-ai-是否继续回复">2.2 接管后 AI 是否继续回复</h3>
+<p><strong>不继续。</strong> 工单 <code>accepted</code> 时，同步把 <code>app.chat_session.ai_enabled</code> 置为 <code>false</code>；<br>此后用户消息直接进人工队列，不再触发图运行。</p>
+<p>理由（也是面试时的加分点）：</p>
+<ul><li>图已经 <code>END</code>，让它长期挂起等待人工会占着状态不放，没有收益</li><li>人工接管后的多轮对话是<strong>人的对话</strong>，不需要 AI 再插话</li><li>避免"AI 和人工同时回复用户"这种最糟糕的体验</li></ul>
+<p>恢复 AI：坐席关闭工单时置回 <code>true</code>（或用户开启新会话）。</p>
+<hr>
+<h2 id="3-后端接口">3. 后端接口</h2>
+<pre><code class="lang-python"># api/ops.py —— 全部要求坐席身份，且按角色做字段脱敏
+
+GET  /ops/tickets                 # 队列：?status=open&amp;priority=P0&amp;page=
+                                  #   默认排序：priority(P0优先) → created_at ASC
+GET  /ops/tickets/{ticket_id}     # 详情：画像摘要 + 最近5轮 + 风险报告 + 命中规则 + 证据
+POST /ops/tickets/{ticket_id}/accept    # 接单 → 写 accepted_at、置 ai_enabled=false
+POST /ops/tickets/{ticket_id}/reply     # 坐席回复 → 走 outbox 发出（见 §5）
+POST /ops/tickets/{ticket_id}/escalate  # 升级给值班医师（必填理由）
+POST /ops/tickets/{ticket_id}/close     # 关闭（close_reason 必填）
+POST /ops/tickets/{ticket_id}/reopen    # 重新打开
+POST /ops/tickets/{ticket_id}/misreport # 标记误报 → ops.misreport_feedback
+
+GET  /ops/stream                   # SSE：新工单 / 超时告警 / 状态变更，用于队列实时刷新
+GET  /ops/metrics                  # 指标看板数据（见 §6）</code></pre>
+<p><strong>列表接口的排序即产品</strong>：P0 必须永远在最上面，且 P0 工单进入队列时触发前端提示音 + 弹窗。<br>一条工单从 <code>open</code> 变 <code>P0</code> 却没有坐席看到，这个功能就等于没做。</p>
+<h3 id="31-超时告警">3.1 超时告警</h3>
+<pre><code class="lang-python"># 定时任务（每 10 秒扫一次）
+if ticket.status == "open":
+    if ticket.priority == "P0" and now - ticket.created_at &gt; 60s:
+        notify_duty_doctor(ticket); ticket.event("sla_breach")
+    elif ticket.priority == "P1" and now - ticket.created_at &gt; 10min:
+        notify_shift_lead(ticket); ticket.event("sla_breach")
+    elif now - ticket.created_at &gt; 48h:
+        auto_close(ticket, reason="no_response")</code></pre>
+<hr>
+<h2 id="4-前端页面结构">4. 前端页面结构</h2>
+<p>四个视图，不要做成一个大杂烩。</p>
+<h3 id="41-视图一实时队列坐席默认页">4.1 视图一：实时队列（坐席默认页）</h3>
+<pre><code>┌───────────────────────────────────────────────────────────────┐
+│ [P0 急诊 ●3] [P1 优先 ●7] [全部] [我的]        值班：医师A ●在线 │
+├───────────────────────────────────────────────────────────────┤
+│ 🔴 P0  02:13  术后异常·视力模糊   浦东店·热玛吉·术后3天   [接单] │
+│ 🔴 P0  01:47  过敏·呼吸困难       静安店·水光针·术后当天   [接单] │
+│ 🟠 P1  08:20  退费争议            已沟通2轮              [接单] │
+│ 🟠 P1  12:05  审查超限转人工      修订2次仍未通过         [接单] │
+│ ⚪ P2  35:10  追问超限转人工      连续2次无法定位意图      [接单] │
+└───────────────────────────────────────────────────────────────┘</code></pre>
+<p>每行必须有的信息：<strong>优先级、等待时长、转人工原因、关键业务上下文（项目 + 门店 + 术后天数）</strong>。<br>少任何一项，坐席都得点进去才知道要不要先接——那就失去了队列的意义。</p>
+<h3 id="42-视图二会话详情">4.2 视图二：会话详情</h3>
+<p>三栏布局：</p>
+<div class="tw"><table><thead><tr><th>栏</th><th>内容</th></tr></thead><tbody><tr><td>左（用户侧）</td><td>画像摘要（≤400 字）+ 授权状态 + 历史项目/预约 + 敏感字段脱敏展示</td></tr><tr><td>中（对话）</td><td>最近 5 轮完整对话（含 AI 未发出的草稿与审查意见，用灰底标注"未发送"）</td></tr><tr><td>右（风险报告）</td><td>风险等级 + 命中规则编号与原文片段 + 三位专家意见 + 是否同族复核 + 证据列表</td></tr></tbody></table></div>
+<p><strong>"未发送的草稿"很重要</strong>：坐席需要看到 AI 想说什么、为什么被拦下来，这决定了他怎么接话。</p>
+<h3 id="43-视图三处置面板">4.3 视图三：处置面板</h3>
+<p>动作按钮：<code>接管</code> / <code>回复</code> / <code>转医师</code> / <code>关闭</code> / <code>标记误报</code> / <code>查看完整审计</code>。</p>
+<p>回复框需要：</p>
+<ul><li>快捷话术（按原因分类：急诊引导、退费流程、追问澄清）</li><li>回复前的<strong>轻校验提示</strong>（见 §5）</li><li>发送后记录 <code>agent_action_log</code></li></ul>
+<h3 id="44-视图四指标与规则调优">4.4 视图四：指标与规则调优</h3>
+<pre><code>[今日概览]
+转人工率 8.3%    P0 平均响应 42s    P0 超时 1 次
+审查一次通过率 76%  平均修订次数 0.31  block 命中 12 次
+
+[Top 命中规则]              [误报样本队列]
+AD-001 疗效承诺      31     待复核 14 条   [逐条看] [批量确认误报]
+MED-001 诊断结论      9
+OPS-001 重复执行      3</code></pre>
+<p><strong>误报样本队列是这个面板真正的价值所在</strong> —— 没有它，紧急词表永远是拍脑袋定的。</p>
+<hr>
+<h2 id="5-坐席回复要不要过审">5. 坐席回复要不要过审？</h2>
+<p>这是一个必须明确取舍的点。蓝图的要求是"<strong>人工不能绕过权限和业务限制</strong>"，<br>但如果坐席每句话都等 LLM 审查 20 秒，工单就没法干活了。</p>
+<p><strong>MVP 建议：规则层轻校验 + 审计留痕，不调 LLM。</strong></p>
+<pre><code class="lang-python">async def agent_reply(ticket_id: str, text: str, agent: AgentUser):
+    # 1) 确定性规则快筛（毫秒级）：仅查禁发词与敏感数据
+    hits = rules.quick_check(text)          # AD-001/002、PRIV-001
+    if hits:
+        if any(h.action == "block" for h in hits):
+            raise Forbidden("命中禁止发送项，请修改后再发")   # 硬拦
+        return {"warning": hits}            # 软提示：前端高亮 + 需二次确认
+    # 2) 权限校验：坐席不能替用户执行操作
+    if looks_like_operation(text):
+        raise Forbidden("坐席不能代为执行预约/退费操作，请引导用户走系统流程")
+    # 3) 直接发送 + 审计
+    await outbox.send(ticket_id, text, actor=f"agent:{agent.agent_id}")
+    await log_agent_action(agent, ticket_id, "reply", {"text_hash": sha256(text), "rule_hits": hits})</code></pre>
+<p>为什么这样取舍（面试可以讲）：</p>
+<ul><li>人工回复的<strong>风险性质不同</strong>：坐席是有资质、有责任制的人，不是概率模型</li><li>但<strong>硬性阻断项仍必须拦</strong>（泄露隐私、篡改记录）——这类错误人是会犯的</li><li>全程留痕，事后可追溯到人</li></ul>
+<hr>
+<h2 id="6-指标定义先定义清楚再谈优化">6. 指标定义（先定义清楚，再谈优化）</h2>
+<div class="tw"><table><thead><tr><th>指标</th><th>定义</th><th>用途</th></tr></thead><tbody><tr><td>转人工率</td><td>产生工单的会话 / 总会话</td><td>衡量 AI 覆盖率</td></tr><tr><td>P0 响应时长</td><td><code>accepted_at - created_at</code>，看 P50/P95</td><td>急诊场景的核心指标，<strong>P95 比 P50 重要</strong></td></tr><tr><td>SLA 违约次数</td><td>超时未接的工单数</td><td>值班排班依据</td></tr><tr><td>一次通过率</td><td><code>review_round = 1</code> 且 <code>verdict = pass</code> 的占比</td><td>衡量生成侧质量</td></tr><tr><td>平均修订次数</td><td><code>revision_count</code> 均值</td><td>同上</td></tr><tr><td>block 命中 Top</td><td>按 <code>rule_id</code> 聚合</td><td>定位生成侧的系统性偏差</td></tr><tr><td>误报率</td><td><code>false_positive</code> / 总命中</td><td><strong>调词表的唯一依据</strong></td></tr><tr><td>同族复核占比</td><td><code>escalation_used and not escalation_independent</code></td><td>提醒这是 MVP 的已知缺口</td></tr></tbody></table></div>
+<hr>
+<h2 id="7-值班与告警">7. 值班与告警</h2>
+<div class="tw"><table><thead><tr><th>事件</th><th>通知对象</th><th>渠道</th><th>时限</th></tr></thead><tbody><tr><td>P0 工单创建</td><td>当日值班医师 + 客服主管</td><td>面板弹窗 + 提示音 + IM</td><td>立即</td></tr><tr><td>P0 超过 60 秒未接</td><td>客服主管 + 医师</td><td>IM + 电话（可选）</td><td>60 秒</td></tr><tr><td>P1 超过 10 分钟未接</td><td>客服主管</td><td>IM</td><td>10 分钟</td></tr><tr><td><code>block</code> 命中突增（1 小时内 &gt; 20 次）</td><td>合规</td><td>IM</td><td>1 小时</td></tr><tr><td>模型调用错误率 &gt; 5%</td><td>开发</td><td>IM</td><td>5 分钟</td></tr></tbody></table></div>
+<hr>
+<h2 id="8-与图的接口边界谁来写哪些字段">8. 与图的接口边界（谁来写哪些字段）</h2>
+<div class="tw"><table><thead><tr><th>字段</th><th>写入方</th><th>时机</th></tr></thead><tbody><tr><td><code>handoff_ticket.*</code>（创建）</td><td><strong>图</strong> → <code>human_handoff</code> 节点</td><td>转人工时</td></tr><tr><td><code>handoff_ticket.accepted_at</code> / <code>assigned_to</code></td><td><strong>运营后台</strong></td><td>坐席接单时</td></tr><tr><td><code>chat_session.ai_enabled</code></td><td><strong>运营后台</strong></td><td>接单置 false、关单置 true</td></tr><tr><td><code>chat_session.emergency</code></td><td><strong>图</strong> → <code>emergency_screen</code></td><td>命中紧急信号时</td></tr><tr><td><code>handoff_event.*</code></td><td><strong>运营后台</strong></td><td>每次处置动作</td></tr><tr><td><code>ops.misreport_feedback.*</code></td><td><strong>运营后台</strong></td><td>坐席标记误报时</td></tr><tr><td><code>app.chat_message</code>（人工回复）</td><td><strong>运营后台</strong>（<code>role='agent'</code>）</td><td>坐席发送时</td></tr></tbody></table></div>
+<p><strong>规矩</strong>：图只负责"创建工单并说一句已转接"，<strong>接管之后的一切都在图外</strong>。<br>这条边界如果模糊，就会出现"AI 与人同时回复"的经典事故。</p>
+<hr>
+<h2 id="9-mvp-可以砍掉的部分">9. MVP 可以砍掉的部分</h2>
+<div class="tw"><table><thead><tr><th>功能</th><th>MVP</th><th>理由</th></tr></thead><tbody><tr><td>坐席 IM / 电话告警</td><td>砍</td><td>面板弹窗 + 提示音够演示</td></tr><tr><td>工单分配算法（按技能/负载）</td><td>砍，用抢单</td><td>工单量小，抢单更简单</td></tr><tr><td>值班排班表</td><td>砍，写死一个值班医师</td><td>演示用</td></tr><tr><td>误报自动调优</td><td>砍，只做人工确认队列</td><td>数据量不够，谈不上调优</td></tr><tr><td>完整审计检索界面</td><td>保留只读列表</td><td>面试时这是加分项，别砍</td></tr><tr><td>工单与现有客服系统对接</td><td>砍，先用本地表</td><td>接口对接成本高，演示价值低</td></tr></tbody></table></div>
+<hr>
+<h2 id="实现补充codeappops-已实现并验证">实现补充（<code>Code/app/ops/</code> 已实现并验证）</h2>
+<p>代码在 <code>Code/app/ops/</code>：<code>deps.py</code>（角色权限与脱敏）、<code>service.py</code>（状态机与不变量）、<br><code>routes.py</code>（REST + SSE）、<code>panel.html</code>（单文件面板）。<br>验证脚本 <code>Code/scripts/smoke_ops.py</code>（36 项断言，含跨模块联动）。</p>
+<h3 id="落地情况">落地情况</h3>
+<div class="tw"><table><thead><tr><th>设计</th><th>实现</th></tr></thead><tbody><tr><td>四个视图</td><td>合并为一个单文件面板（队列 / 详情 / 处置 / 指标同页），无构建步骤</td></tr><tr><td>工单状态机与五条不变量</td><td><code>service.py</code>，全部有断言</td></tr><tr><td>角色权限矩阵</td><td><code>deps.py</code> 的 <code>PERMISSIONS</code>，路由层只查表</td></tr><tr><td>误报回流</td><td><code>POST /ops/tickets/{id}/misreport</code> → <code>ops.misreport_feedback</code></td></tr><tr><td>SLA 告警</td><td><code>/ops/stream</code> 推 <code>alert</code> 事件（同一工单只推一次，不重复刷屏）</td></tr></tbody></table></div>
+<h3 id="两处实测与设想不同">两处实测与设想不同</h3>
+<ol><li><strong>中文坐席名不能放进请求头</strong>。HTTP 头按规范是 latin-1，<code>X-Agent-Name: 测试坐席</code><br>会被 httpx / 浏览器直接拒绝（<code>UnicodeEncodeError</code>）。<br>正确做法：请求头只传 ASCII 的 <code>agent_id</code> + <code>role</code>，<strong>显示名由服务端按 id 查 <code>ops.agent_user</code></strong><br>（生产）或前端本地维护（MVP）。这一点在设计阶段完全没意识到。</li><li><strong>队列实时性用服务端轮询推送</strong>（3 秒一帧），不是真正的 pub/sub。<br>生产换 Redis pub/sub 或 Postgres LISTEN/NOTIFY 时<strong>只替换流本身</strong>，前端契约<br>（<code>snapshot</code> / <code>alert</code>）不用动。另外单条 SSE 连接设了 30 分钟寿命上限，<br>否则客户端悄悄断开后会留下僵尸连接占着连接池。</li></ol>
+<h3 id="报错的顺序也是设计的一部分">报错的顺序也是设计的一部分</h3>
+<p><code>accept</code> 的判断顺序是：<strong>已关闭 → 已被接单 → 状态机</strong>。<br>按"代码检查顺序"写的话，重复接单会得到"状态 accepted 不能变为 accepted"<br>——对坐席毫无解释力。<strong>错误信息要按"对使用者最有解释力"的顺序选，而不是按实现顺序。</strong></p>
+<p>同理，关闭工单"缺原因"由领域层给 <code>reason_required</code>（400），<br>而不是让 Pydantic 的 <code>min_length</code> 拦成通用 422 —— 前端需要能区分<br>"参数格式错"与"业务上必须填原因"。</p></main></div>
+<footer>由 <code>build-docs.cjs</code> 从 Markdown 生成 —— 请修改源文件后重新执行，不要手改本页。图与源码自检：<code>node check-mermaid.cjs</code>。</footer>
+</body>
+</html>

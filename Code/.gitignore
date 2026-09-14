@@ -1,0 +1,30 @@
+# 环境与密钥
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv（沙箱/受限环境下缓存要放在工作区内）
+.uv-cache/
+
+# HuggingFace 模型缓存（约 2.8GB，不要把模型提交进仓库）
+.hf-cache/
+models/
+
+# 模型缓存（如果放到项目内）
+models/
+*.safetensors
+
+# 本地数据与产物
+*.log
+*.db
+*.sqlite3
+output/

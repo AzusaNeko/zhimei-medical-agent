@@ -1,0 +1,81 @@
+%% 智美医美顾问 · 风险审查子图（主图中的 risk_gate）内部结构
+%% 同一份编译后的子图被调用三次：
+%%   review_kind = content      审查专业 Agent 草稿 / 澄清问题 / 紧急提示
+%%   review_kind = operation    审查待确认的操作方案
+%%   review_kind = result_reply 审查真实执行结果回复（由主图 recheck 节点调用）
+%% 终止出口：issue_token 放行 / need_info 补件 / block 阻断 / handoff 转人工
+%% 修订出口：feedback → retry_check → resubmit 重新进入 gate_in（有次数上限）
+
+flowchart TB
+  gate_in(["审查请求标准化<br/>gate_in"])
+
+  review_input{"输入完整且具备权限？<br/>review_input"}
+  need_info["要求补充或阻止执行<br/>need_info"]
+  emergency_check{"原始消息命中紧急信号？<br/>emergency_check"}
+
+  hard_rules["确定性硬规则检查<br/>hard_rules"]
+  hard_hit{"命中硬性阻断？<br/>hard_hit"}
+  block["阻止执行并记录规则编号<br/>block"]
+
+  expert_panel["多专家并行审查<br/>expert_panel"]
+  escalate{"高风险或意见冲突？<br/>escalate"}
+  r1_review["DeepSeek-R1 独立复核<br/>r1_review"]
+
+  op_check{"是否敏感操作？<br/>op_check"}
+  biz_check["业务校验：状态与执行条件<br/>biz_check"]
+
+  merge_verdict["聚合硬规则与专家意见<br/>merge_verdict"]
+  verdict{"审查结论<br/>verdict"}
+
+  feedback["输出修改意见并记次数<br/>feedback"]
+  retry_check{"低于最大复审次数？<br/>retry_check"}
+  resubmit["修订后重新提交<br/>resubmit"]
+
+  issue_token["签发放行凭据并写审计<br/>issue_token"]
+  handoff["创建人工接管任务<br/>handoff"]
+
+  %% ---------- 主干 ----------
+  gate_in --> review_input
+  review_input -->|否：资料不全或无权限| need_info
+  review_input -->|是| emergency_check
+  emergency_check -->|是：放行已审风险提示| issue_token
+  emergency_check -->|是：立即创建人工接管| handoff
+  emergency_check -->|否| hard_rules
+
+  hard_rules --> hard_hit
+  hard_hit -->|是| block
+  hard_hit -->|否| expert_panel
+
+  expert_panel --> escalate
+  escalate -->|是| r1_review
+  escalate -->|否| op_check
+  r1_review --> op_check
+
+  op_check -->|是| biz_check
+  op_check -->|否| merge_verdict
+  biz_check --> merge_verdict
+
+  merge_verdict --> verdict
+  verdict -->|pass 通过| issue_token
+  verdict -->|revise 需修改| feedback
+  verdict -->|block 硬性阻断| block
+  verdict -->|human 高风险| handoff
+
+  %% ---------- 修订回路 ----------
+  feedback --> retry_check
+  retry_check -->|是：计数加一| resubmit
+  resubmit --> gate_in
+  retry_check -->|否：超限| handoff
+
+  %% ---------- 样式 ----------
+  classDef io fill:#e8f1fb,stroke:#4a7fb5,stroke-width:1.5px,color:#17405f;
+  classDef dec fill:#fff4dd,stroke:#b3862a,stroke-width:1.5px,color:#6d4c08;
+  classDef rul fill:#ffe3de,stroke:#c8493a,stroke-width:1.5px,color:#8a2a1e;
+  classDef mdl fill:#e6f4ee,stroke:#3f8a72,stroke-width:1.5px,color:#1a5044;
+  classDef hum fill:#f1eaf9,stroke:#8264ad,stroke-width:1.5px,color:#492f6b;
+
+  class gate_in,issue_token io;
+  class review_input,emergency_check,hard_hit,escalate,op_check,verdict,retry_check dec;
+  class hard_rules,block,need_info,biz_check,merge_verdict,feedback,resubmit rul;
+  class expert_panel,r1_review mdl;
+  class handoff hum;

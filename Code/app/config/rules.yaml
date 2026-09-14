@@ -1,0 +1,250 @@
+# ════════════════════════════════════════════════════════════════
+#  规则资产（规则内容集中在这里；数值基线在 .env / settings.py）
+#  ⚠️ 本文件是草稿，上线前必须由医学顾问与法务审定
+#  修改后规则版本号必须递增，审计会把命中的 rule_id + version 一起记下来
+# ════════════════════════════════════════════════════════════════
+
+version: "0.1"
+
+# ── 意图 → 主图节点（静态路由表，纯规则，不调模型）──
+routing:
+  knowledge_edu: k_agent
+  recommend: r_agent
+  clinic_info: c_agent
+  booking: b_agent
+  postcare: p_agent
+  # clarify / other 不在此表内，由 dispatch 走澄清或兜底
+
+# 多意图并存时的优先级（越靠前越优先）
+intent_priority: [booking, postcare, knowledge_edu, clinic_info, recommend]
+max_fanout: 3
+
+# ════════════════════════════════════════════════════════════════
+#  1. 紧急信号词表
+#  ⚠️ 判定原则：宁可误报，不可漏报
+# ════════════════════════════════════════════════════════════════
+emergency:
+  version: "0.1"
+
+  # 这些词单独出现不算症状，必须与"程度词"或"部位词"共现才算
+  generic_terms: [疼, 痛, 肿, 红, 麻, 白, 紫, 痒, 热, 硬]
+  intensity_terms: [特别疼, 疼得受不了, 剧烈疼痛, 很疼, 疼得厉害, 无法忍受, 越来越疼]
+  body_terms: [脸, 面部, 眼, 眼睛, 嘴, 唇, 额头, 下巴, 苹果肌, 太阳穴, 鼻, 注射部位, 填充部位, 打针的地方]
+
+  # 出现这些标记时不算"自述症状"（询问风险 / 否定 / 第三人称 / 假设）
+  question_markers: [会不会, 能不能, 是否, 可不可以, 听说, 网上说, 有人说, 如果, 万一, 假设, 怎么办, 会导致吗]
+  negation_markers: [没有, 没, 不, 无, 并非, 不是]
+  third_person_markers: [我朋友, 我同事, 我姐姐, 我妹妹, 我妈妈, 别人, 有人, 网上有人]
+
+  # ★ P0：立即发预审模板提示 + 立即创建人工接管工单
+  p0:
+    - cluster: vision
+      note: 面部注射后出现视力症状是血管栓塞的典型表现，最危急
+      terms: [看不见, 看不清, 视力模糊, 视力下降, 突然看不清, 视野缺损, 眼前发黑, 眼前一黑, 黑影飘, 重影, 复视, 眼球疼, 眼痛, 失明]
+    - cluster: respiratory
+      note: 过敏性休克可在数分钟内进展
+      terms: [呼吸困难, 喘不上气, 憋气, 喉咙发紧, 喉头水肿, 嘴唇肿, 舌头发麻, 全身起疹, 风团, 过敏性休克, 喘不过气]
+    - cluster: circulation
+      terms: [胸痛, 胸闷, 心悸, 心跳很快, 晕厥, 晕倒, 站不住, 意识模糊, 叫不醒, 抽搐]
+    - cluster: neuro
+      terms: [口角歪斜, 面部歪, 半身无力, 说话不清, 手脚发麻, 面部麻木]
+    - cluster: necrosis
+      note: 填充物压迫血管导致皮肤坏死的前兆
+      terms: [皮肤发白, 脸发白, 面部发白, 皮肤发紫, 花斑, 皮肤发凉, 发黑, 黑痂, 水疱, 起泡]
+    - cluster: bleeding
+      terms: [出血不止, 一直流血, 大量出血, 伤口裂开, 血肿变大]
+    - cluster: infection
+      terms: [高烧, 高热, 寒战, 打冷战, 化脓, 脓性分泌物, 红肿扩散]
+    - cluster: self_harm
+      terms: [想死, 不想活, 自杀, 结束生命, 活不下去]
+    - cluster: seek_help
+      terms: [要去医院, 叫救护车, "120", 急诊, 送医院]
+
+  # P1：优先接管（普通客服 → 可升级医师）
+  p1:
+    - cluster: postop_abnormal
+      terms: [一直肿, 肿不退, 红肿不退, 硬块, 不对称, 明显的坑, 凹陷, 麻木不退, 淤青变大, 低烧, 有点发热]
+    - cluster: medication
+      terms: [自己吃了药, 吃了消炎药, 想加量, 能吃什么药, 能不能吃]
+    - cluster: dispute
+      terms: [退款, 退费, 投诉, 曝光, 律师, 起诉, "315", 卫健委, 医调委, 找媒体, 要说法]
+    - cluster: special_population
+      terms: [怀孕, 备孕, 哺乳期, 未成年, 糖尿病, 凝血, 免疫疾病, 疤痕体质, 心脏病]
+
+  # P2：只打标签，不升级
+  p2:
+    - cluster: attention
+      terms: [效果不满意, 担心, 焦虑, 比价, 其他机构, 别家]
+
+# ════════════════════════════════════════════════════════════════
+#  2. 高风险标签（决定是否需要二次复核 escalate）
+# ════════════════════════════════════════════════════════════════
+risk_tags:
+  version: "0.1"
+  HIGH:
+    - { tag: complication_signal, keywords: [并发症, 异常, 不正常, 副作用] }
+    - { tag: diagnosis_request,   keywords: [这是什么情况, 是不是正常, 我这是, 算不算] }
+    - { tag: medication_advice,   keywords: [吃药, 用药, 消炎药, 抗生素, 剂量, 停药] }
+    - { tag: refund_dispute,      keywords: [退款, 退费, 赔偿, 投诉] }
+    - { tag: legal_threat,        keywords: [律师, 起诉, 曝光, 监管, 卫健委] }
+    - { tag: minor,               keywords: [未成年, 17岁, 16岁, 我女儿, 我儿子] }
+    - { tag: pregnant_or_lactating, keywords: [怀孕, 备孕, 哺乳, 孕期] }
+    - { tag: comorbidity,         keywords: [糖尿病, 高血压, 凝血, 免疫, 心脏病, 甲亢] }
+    - { tag: unauthorized_provider, keywords: [] }   # 数据驱动：由 c_agent 的资质查询判定
+    - { tag: privacy_leak,        keywords: [] }     # 由硬规则 PRIV-* 判定
+    - { tag: self_harm,           keywords: [想死, 自杀, 不想活] }
+    - { tag: professional_claim,  keywords: [我建议你, 我判断, 你的情况是] }
+  MEDIUM:
+    - { tag: efficacy_guarantee,  keywords: [保证, 根治, 一次见效, 永久] }
+    - { tag: absolute_wording,    keywords: [最好, 第一, 唯一, 全网最低, 最安全] }
+    - { tag: comparative_ad,      keywords: [比其他家, 比别家, 比医院] }
+    - { tag: anxiety_induce,      keywords: [再不, 否则会, 小心变] }
+    - { tag: case_evidence,       keywords: [案例, 患者照片, 前后对比] }
+    - { tag: missing_disclaimer,  keywords: [] }     # 结构性检查：草稿是否含面诊提示
+    - { tag: vague_price,         keywords: [大概多少钱, 差不多, 左右] }
+  LOW:
+    - { tag: general_education,   keywords: [] }
+
+# ════════════════════════════════════════════════════════════════
+#  3. 硬性阻断规则
+#     判据：改文案也解决不了 → block；改文案能解决 → revise
+# ════════════════════════════════════════════════════════════════
+hard_rules:
+  version: "0.1"
+  # 同一 rule_id 在复审中重复命中达到该次数 → 升级为 block
+  repeat_escalate_threshold: 2
+
+  rules:
+    - id: AD-001
+      category: ad
+      severity: high
+      action: revise
+      title: 疗效承诺
+      check: literal
+      patterns: [保证, 根治, 一次见效, 永久有效, 彻底解决, 包好, 绝对有效, 百分百有效, 100%有效, 永不复发]
+
+    - id: AD-002
+      category: ad
+      severity: high
+      action: revise
+      title: 绝对化用语
+      check: literal
+      patterns: [最好, 第一, 唯一, 全网最低, 最安全, 最有效, 顶级, 国家级, 首屈一指]
+
+    - id: AD-003
+      category: ad
+      severity: medium
+      action: revise
+      title: 无来源数据
+      check: regex
+      patterns: ['\d{2,3}\s*%', '上万例', '有效率\s*\d', '\d+\s*例成功']
+
+    - id: MED-001
+      category: medical
+      severity: high
+      action: revise
+      title: 输出诊断结论
+      check: literal
+      patterns: [你这是, 你得了, 确诊, 诊断为, 你的情况属于]
+
+    - id: MED-002
+      category: medical
+      severity: high
+      action: revise
+      title: 给出用药建议
+      check: literal
+      patterns: [吃点药, 用点药, 涂抹, 软膏, 抗生素, 消炎药, 加量, 停药]
+
+    - id: MED-003
+      category: medical
+      severity: high
+      action: revise
+      title: 判断症状严重程度
+      check: literal
+      patterns: [没事, 不严重, 很正常, 不用担心, 很严重, 没大问题]
+
+    - id: PRIV-001
+      category: privacy
+      severity: high
+      action: block
+      title: 泄露个人敏感信息
+      check: regex
+      patterns: ['\b\d{17}[\dXx]\b', '\b1[3-9]\d{9}\b', '病历原文', '身份证号']
+
+    - id: PRIV-002
+      category: privacy
+      severity: high
+      action: block
+      title: 使用未授权数据
+      check: semantic
+      patterns: []
+      note: 由 review_input 的授权校验判定，此处仅占位
+
+    - id: OPS-001
+      category: ops
+      severity: high
+      action: block
+      title: 重复执行同一操作
+      check: ops
+      patterns: []
+
+    - id: OPS-002
+      category: ops
+      severity: high
+      action: block
+      title: 未经用户确认即执行
+      check: ops
+      patterns: []
+
+    - id: OPS-003
+      category: ops
+      severity: high
+      action: block
+      title: 操作前置条件不成立
+      check: ops
+      patterns: []
+
+    - id: OPS-004
+      category: ops
+      severity: high
+      action: block
+      title: 越权操作
+      check: ops
+      patterns: []
+
+    - id: LEG-001
+      category: legal
+      severity: high
+      action: block
+      title: 篡改或删除医疗记录
+      check: semantic
+      patterns: [删除病历, 改病历, 删掉记录, 修改记录]
+
+    - id: LEG-002
+      category: legal
+      severity: high
+      action: block
+      title: 推荐无资质医生或未获批设备
+      check: semantic
+      patterns: []
+
+# ════════════════════════════════════════════════════════════════
+#  4. 澄清模板（封闭式、一次最多 2–3 问、结尾必带面诊提示）
+# ════════════════════════════════════════════════════════════════
+clarify:
+  disclaimer: "具体仍以医生面诊评估为准。"
+  templates:
+    project: "想先确认您说的是哪个项目？可以告诉我是**热玛吉 / 超声炮 / 水光针**中的哪一个，或直接说项目名称。"
+    body_part: "您主要想改善的是**面部紧致**、**下颌轮廓**，还是**其他部位**？"
+    recovery: "您更希望**当天可正常上班**，还是**可以接受 3–7 天的轻微红肿**？"
+    history: "以前做过同类项目吗（如**热玛吉 / 超声炮 / 线雕**）？"
+    postop_day: "方便告诉我是**术后第几天**吗？不同阶段的护理建议不一样。"
+    store: "您想咨询的是**浦东店**还是**静安店**？"
+
+# ════════════════════════════════════════════════════════════════
+#  5. 业务实体字典（供意图识别做归一化；MVP 用静态表，上线换成业务库）
+# ════════════════════════════════════════════════════════════════
+entities:
+  projects: [热玛吉, 超声炮, 水光针, 线雕, 光子嫩肤, 皮秒, 瘦脸针, 玻尿酸填充]
+  stores: [浦东店, 静安店, 徐汇店]
+  doctors: [张医生, 李医生, 王医生]

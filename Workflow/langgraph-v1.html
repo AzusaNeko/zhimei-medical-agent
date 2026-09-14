@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智美 · LangGraph 落地包 v1</title>
+<style>
+:root{--ink:#19344a;--muted:#586d7b;--line:#d7e1e7;--accent:#226b62;--track:#eef2f5;--thumb:#9aaebc}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--thumb) var(--track)}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-track{background:var(--track)}::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:8px}::-webkit-scrollbar-thumb:hover{background:#728d9e}::-webkit-scrollbar-thumb:active{background:#526d7e}
+html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:#f3f6f8;color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif}
+header,main,footer{max-width:1500px;margin:auto;padding:28px 36px}
+header{padding-top:42px}.eyebrow{font:12px/1.6 Consolas,monospace;color:var(--accent);letter-spacing:2px}
+h1{font-size:34px;letter-spacing:-1px;line-height:1.4;margin:12px 0}p{color:var(--muted);margin:8px 0}
+h2{font-size:22px;margin:2px 0 6px}h3{font-size:17px;margin:24px 0 8px}
+nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}a,button,summary{cursor:pointer}
+nav a,button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:8px 14px;color:var(--ink);font:inherit;text-decoration:none}
+nav a:hover,button:hover{background:#e8f2f0;border-color:#75a69a}button:active{background:#d7e8e3}button:disabled{opacity:.5;cursor:not-allowed}
+.doclinks{margin-top:20px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.doclinks a{font-size:13px;padding:7px 12px}
+.doclinks a.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.doclinks a.active:hover{background:#1b554e;border-color:#1b554e}
+nav[aria-label="页面导航"]{margin-top:16px}
+a:focus-visible,button:focus-visible,summary:focus-visible,.viewport:focus-visible{outline:3px solid #2c788f;outline-offset:3px}
+main{padding-top:0}
+.diagram-card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:0 0 32px;scroll-margin-top:24px}
+.card-head{padding:24px 28px;border-bottom:1px solid var(--line)}
+.heading-line{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.index{font:12px Consolas,monospace;color:var(--accent)}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.tools button{font-size:13px;padding:6px 10px}
+.zoom-label{font:12px Consolas,monospace;width:45px;text-align:center}
+.viewport{overflow:auto;padding:28px;min-height:250px;max-height:1100px;background-color:#fff;background-image:radial-gradient(#e2e9ee .8px,transparent .8px);background-size:18px 18px;scrollbar-gutter:stable}
+.diagram{margin:auto;width:100%;min-width:1000px}.diagram svg{display:block;width:100%;height:auto;max-width:none!important}
+details{border-top:1px solid var(--line);padding:14px 28px}
+summary{width:fit-content;color:var(--accent);font-weight:600}summary:hover{text-decoration:underline}
+pre{background:#f3f6f8;padding:20px;overflow:auto;font:13px/1.7 Consolas,monospace;tab-size:2;max-height:460px;white-space:pre}
+code{font-family:Consolas,"Courier New",monospace}
+.source-note,.render-status{font-size:12px;color:var(--muted)}.render-status{padding:12px 0;font-size:14px}
+.facts{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:5px}
+.facts li{font-size:12.5px;line-height:1.62;color:var(--muted);padding-left:15px;position:relative}
+.facts li::before{content:"";position:absolute;left:2px;top:.62em;width:5px;height:5px;border-radius:50%;background:#b9c8d2}
+.facts code{font-size:11.5px;background:#eef2f5;padding:1px 4px;border-radius:3px;color:#35466d}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:14px 0 0;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:12px;height:12px;border-radius:3px;border:1.5px solid #ccc;display:inline-block;flex:none}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:18px 0 30px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.stat b{display:block;font-size:24px;letter-spacing:-.5px}.stat span{color:var(--muted);font-size:12px}
+.section{margin:38px 0;scroll-margin-top:24px}.section>h2{font-size:25px;margin:0 0 4px}
+.sub{scroll-margin-top:24px}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;margin:12px 0 26px;background:#fff}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+th{background:#f3f6f8;font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+td code,th code{font-size:12px;background:#eef2f5;padding:1px 5px;border-radius:4px;white-space:nowrap}
+.note{background:#e8f2f0;border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:14px 16px;color:#315a58;font-size:13px;margin:14px 0}
+.warn{background:#fff8f6;border-left:3px solid #c17768;border-radius:0 8px 8px 0;padding:14px 16px;color:#7d4034;font-size:13px;margin:14px 0}
+ol,ul{padding-left:22px}li{margin:6px 0}
+footer{padding-top:0;font-size:12px;color:var(--muted)}
+#feedback{position:fixed;bottom:18px;right:20px;max-width:calc(100vw - 40px);padding:10px 18px;background:var(--ink);color:#fff;border-radius:8px;z-index:10}
+#feedback:empty{display:none}
+@media(max-width:980px){.grid3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){header,main,footer{padding-left:16px;padding-right:16px}h1{font-size:27px}.heading-line{align-items:flex-start;flex-direction:column}.card-head{padding:18px}.viewport{padding:12px}details{padding:12px 18px}.grid3{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{nav,.tools,details,#feedback{display:none}.viewport{max-height:none;overflow:visible;padding:0}.diagram{min-width:0!important;width:100%!important}.diagram-card{break-inside:avoid}body{background:#fff}header,main{padding:10px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">ZHIMEI / LANGGRAPH IMPLEMENTATION KIT v1</div>
+  <h1>智能医美顾问 · LangGraph 落地包</h1>
+  <p>在原有主干图上补齐 P0：唯一扇入点、有上限且定向的修订回路、执行闭环与结果复审、硬性阻断与补件出口、紧急优先路径、放行凭据与审计。</p>
+  <p><b>命名约定</b>：节点 id 就是 <code>add_node</code> 的名称；菱形节点就是 <code>add_conditional_edges</code> 的路由点；出边标签就是路由函数的返回值（<code>pass</code> / <code>revise</code> / <code>need_info</code> / <code>block</code> / <code>human</code>）。</p>
+  <nav class="doclinks" aria-label="设计文档导航">
+    <a href="langgraph-v1.html" class="active" aria-current="page">架构总览</a>
+    <a href="arch-pseudocode.html">伪代码讲解</a>
+    <a href="arch-supervisor.html">总控与意图</a>
+    <a href="config-rules.html">规则与参数</a>
+    <a href="data-model.html">数据模型</a>
+    <a href="ops-console.html">运营后台</a>
+  </nav>
+  <nav aria-label="页面导航">
+    <a href="#flow-main">主图</a>
+    <a href="#flow-knowledge">知识科普子图</a>
+    <a href="#flow-gate">风险审查子图</a>
+    <a href="#contract">落地契约</a>
+    <a href="#p0">P0 对照</a>
+    <a href="#nodes">节点清单</a>
+    <a href="#edges">条件边</a>
+    <a href="#state">State 契约</a>
+    <a href="#rules">硬约束</a>
+    <a href="#rollout">落地顺序</a>
+  </nav>
+</header>
+
+<main>
+<section class="section" id="overview" aria-label="概览">
+  <div class="grid3">
+    <div class="stat"><b>8 / 8</b><span>P0 项已补齐</span></div>
+    <div class="stat"><b>27 节点</b><span>主图 · 38 条边 · 3 个分层</span></div>
+    <div class="stat"><b>17 节点</b><span>知识科普子图 · 20 条边</span></div>
+    <div class="stat"><b>19 节点</b><span>风险审查子图 · 调用三次</span></div>
+    <div class="stat"><b>5 档出口</b><span>pass / revise / need_info / block / human</span></div>
+    <div class="stat"><b>9 条硬约束</b><span>凭据 · 幂等 · 重放安全</span></div>
+  </div>
+  <p class="source-note">配套文档：<a href="arch-pseudocode.html">伪代码讲解</a>（技术栈取舍 / State / 主图 / 子图 / Prompt / SSE）、<a href="arch-supervisor.html">总控与意图</a>（两个 Agent 的伪代码与 Prompt 详解）、<a href="config-rules.html">规则与参数</a>（紧急词表 / 风险标签 / 规则编号 / 参数三档）、<a href="data-model.html">数据模型</a>（PostgreSQL 表清单）、<a href="ops-console.html">运营后台</a>（工单状态机与监控面板）。</p>
+</section>
+
+<section class="diagram-card" id="flow-main" data-graph="main" data-file="langgraph-main.mmd">
+  <div class="card-head">
+    <div class="heading-line">
+      <div><span class="index">DIAGRAM 01 / MAIN GRAPH</span><h2>多 Agent 主图（LangGraph 对齐版）</h2></div>
+      <div class="tools" aria-label="主图工具">
+        <button type="button" data-action="minus" aria-label="缩小主图">−</button>
+        <span class="zoom-label">100%</span>
+        <button type="button" data-action="plus" aria-label="放大主图">＋</button>
+        <button type="button" data-action="reset">重置</button>
+        <button type="button" data-action="svg" disabled>下载 SVG</button>
+        <button type="button" data-action="mmd">下载 .mmd</button>
+      </div>
+    </div>
+    <p>入口调度 → 七路草稿产出 → 唯一汇聚点 → 风险审查必经关卡 → 五档出口 → 出口层收敛。</p>
+    <ul class="facts">
+      <li>七路扇入：5 个专业 Agent + 澄清问题 + 紧急提示，全部汇入 <code>aggregate</code> 后才进入守门层；主图上没有第二条通往出口的路。</li>
+      <li>五档出口：<code>pass</code> / <code>revise</code> / <code>need_info</code> / <code>block</code> / <code>human</code>，阻断优先级高于任何风险分数。</li>
+      <li>修订回路：<code>feedback</code> 计数 → <code>retry_check</code> 判上限 → <code>revise</code> 按 <code>state.origin_agent</code> 定向回到原专业 Agent，超限直接转人工。</li>
+      <li>执行闭环：操作请求必须走「明确确认 → 幂等执行 → 结果回复再送审」；<code>final_check</code> 不通过只改回复或转人工，绝不重复执行。</li>
+      <li>出口层：<code>send</code> 强制校验 <code>release_token</code>，所有出站内容都必须持有凭据，没有旁路。</li>
+    </ul>
+    <div class="legend" aria-label="图例">
+      <span><i style="background:#e8f1fb;border-color:#4a7fb5"></i>入口与调度</span>
+      <span><i style="background:#f1eaf9;border-color:#8264ad"></i>专业 Agent</span>
+      <span><i style="background:#ffe3de;border-color:#c8493a"></i>汇聚与守门</span>
+      <span><i style="background:#e6f4ee;border-color:#3f8a72"></i>输出与执行</span>
+      <span><i style="background:#eef1f4;border-color:#6b7d8a"></i>回路控制</span>
+      <span><i style="background:#fff4dd;border-color:#b3862a"></i>出口层</span>
+      <span><i style="background:#f4f6f8;border-color:#a9b8c2"></i>外部输入</span>
+    </div>
+  </div>
+  <div class="viewport" tabindex="0" role="region" aria-label="多 Agent 主图，可横向滚动">
+    <div class="render-status" role="status">正在渲染 Mermaid 图表…</div>
+    <div class="diagram" aria-label="多 Agent 主图"></div>
+  </div>
+  <details><summary>查看 Mermaid 源码</summary><pre><code></code></pre></details>
+</section>
+
+<section class="diagram-card" id="flow-knowledge" data-graph="knowledge" data-file="langgraph-knowledge.mmd">
+  <div class="card-head">
+    <div class="heading-line">
+      <div><span class="index">DIAGRAM 02 / KNOWLEDGE PIPELINE</span><h2>知识科普 Agent 子图</h2></div>
+      <div class="tools" aria-label="知识科普子图工具">
+        <button type="button" data-action="minus" aria-label="缩小知识科普子图">−</button>
+        <span class="zoom-label">100%</span>
+        <button type="button" data-action="plus" aria-label="放大知识科普子图">＋</button>
+        <button type="button" data-action="reset">重置</button>
+        <button type="button" data-action="svg" disabled>下载 SVG</button>
+        <button type="button" data-action="mmd">下载 .mmd</button>
+      </div>
+    </div>
+    <p>八个步骤 + 四个判断点，把口语问题变成「带证据的待审草稿」。</p>
+    <ul class="facts">
+      <li>只产出待审草稿，从不直接对用户说话；三个出口 <code>kb_return</code> / <code>kb_clarify</code> / <code>kb_handoff</code> 全部回到主图 <code>aggregate</code> 统一送审。</li>
+      <li>两个入口：主图 <code>dispatch</code> 按科普意图分派；风险审查判「需修改」时由 <code>revise</code> 定向回到 <code>kb_draft</code> <b>重新生成</b>（再走一遍事实核对）。只回到核对是"只核对不重生成"，内容没变、审查必然再次命中——这一点是跑起来才发现的。</li>
+      <li>检索段只使用审核通过、未过期、版本正确的资料；证据不足时宁可缩小回答范围并说明未知，也不猜。</li>
+      <li>自环 <code>kb_verified → kb_draft</code>：重要结论缺依据就回到生成，再由 <code>kb_verify</code> 重新逐项核对。</li>
+      <li>模型分工：8B 理解与改写、BGE-M3 检索排序、30B 生成、32B → R1 负责证据与事实复核。</li>
+    </ul>
+    <div class="legend" aria-label="图例">
+      <span><i style="background:#e6f4ee;border-color:#3f8a72"></i>流水线步骤</span>
+      <span><i style="background:#fff4dd;border-color:#b3862a"></i>判断点</span>
+      <span><i style="background:#e8f1fb;border-color:#4a7fb5"></i>检索与证据</span>
+      <span><i style="background:#ffe3de;border-color:#c8493a"></i>兜底出口</span>
+      <span><i style="background:#f4f6f8;border-color:#a9b8c2"></i>跨子图边界</span>
+    </div>
+  </div>
+  <div class="viewport" tabindex="0" role="region" aria-label="知识科普 Agent 子图，可横向滚动">
+    <div class="render-status" role="status">正在渲染 Mermaid 图表…</div>
+    <div class="diagram" aria-label="知识科普 Agent 子图"></div>
+  </div>
+  <details><summary>查看 Mermaid 源码</summary><pre><code></code></pre></details>
+</section>
+
+<section class="diagram-card" id="flow-gate" data-graph="gate" data-file="langgraph-risk-gate.mmd">
+  <div class="card-head">
+    <div class="heading-line">
+      <div><span class="index">DIAGRAM 03 / RISK GATE</span><h2>风险审查子图内部结构</h2></div>
+      <div class="tools" aria-label="风险审查子图工具">
+        <button type="button" data-action="minus" aria-label="缩小风险审查子图">−</button>
+        <span class="zoom-label">100%</span>
+        <button type="button" data-action="plus" aria-label="放大风险审查子图">＋</button>
+        <button type="button" data-action="reset">重置</button>
+        <button type="button" data-action="svg" disabled>下载 SVG</button>
+        <button type="button" data-action="mmd">下载 .mmd</button>
+      </div>
+    </div>
+    <p>同一份子图被调用三次：审草稿与澄清问题、审待确认的操作方案、审真实执行结果回复。</p>
+    <ul class="facts">
+      <li>顺序不可调换：完整性校验 → 紧急信号复查 → 确定性硬规则 → 多专家并行 → 业务校验 → 聚合决策。</li>
+      <li><code>emergency_check</code> 命中时同时走两条出口：放行已审风险提示 + 立即创建人工接管。</li>
+      <li><code>hard_hit</code> 与 <code>verdict</code> 都能触发 <code>block</code>；阻断优先于风险分数，并记录规则编号。</li>
+      <li>修订有上限：<code>retry_check</code> 超限直接 <code>handoff</code>，绝不放行。</li>
+      <li>模型只负责发现语义风险并给出修改建议；放行凭据与最终裁决保留给规则与人工。</li>
+    </ul>
+    <div class="legend" aria-label="图例">
+      <span><i style="background:#e8f1fb;border-color:#4a7fb5"></i>输入与放行</span>
+      <span><i style="background:#fff4dd;border-color:#b3862a"></i>判断点</span>
+      <span><i style="background:#ffe3de;border-color:#c8493a"></i>规则与阻断</span>
+      <span><i style="background:#e6f4ee;border-color:#3f8a72"></i>模型复核</span>
+      <span><i style="background:#f1eaf9;border-color:#8264ad"></i>人工接管</span>
+    </div>
+  </div>
+  <div class="viewport" tabindex="0" role="region" aria-label="风险审查子图，可横向滚动">
+    <div class="render-status" role="status">正在渲染 Mermaid 图表…</div>
+    <div class="diagram" aria-label="风险审查子图"></div>
+  </div>
+  <details><summary>查看 Mermaid 源码</summary><pre><code></code></pre></details>
+</section>
+
+<section class="section" id="contract">
+  <h2>落地契约</h2>
+  <p>原 <code>langgraph-implementation.md</code> 的完整内容，随页面一并呈现。</p>
+
+  <h3 class="sub" id="p0">一、P0 补齐对照：原版 → 本版</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>原版缺的 P0 项</th><th>本版落点</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>澄清 fallback</td><td><code>dispatch --"意图不明确"--> clarify</code>，且 <code>clarify --> aggregate</code></td><td>澄清问题同样是出站内容，必须过审</td></tr>
+        <tr><td>聚合层缺失</td><td><code>aggregate</code> = 唯一扇入点</td><td>七个来源（5 个 Agent + 澄清 + 紧急）统一汇聚，产出统一待审对象</td></tr>
+        <tr><td>修订无上限、无定向</td><td><code>feedback → retry_check → revise</code>，<code>revise</code> 定向回到草稿产出层</td><td>计数器在代码里累加；超限走 <code>human_handoff</code>；回退目标由 <code>state.origin_agent</code> 决定</td></tr>
+        <tr><td>缺输出类型分支与执行闭环</td><td><code>output_type → await_confirm → execute_op → receipt → recheck → final_check → send</code></td><td>先审 → 明确确认 → 幂等执行 → <b>结果回复再审</b></td></tr>
+        <tr><td>缺硬性阻断 / 补件出口</td><td><code>risk_gate</code> 五档出口：<code>pass</code> / <code>revise</code> / <code>need_info</code> / <code>block</code> / <code>human</code></td><td>阻断优先级高于风险分数；资料不全不等于低风险</td></tr>
+        <tr><td>缺紧急优先路径</td><td><code>emergency_screen</code>（前置预筛）+ <code>emergency_check</code>（复查原始消息）</td><td>双层：入口抢时间，关卡内复查，防"只审草稿"漏判</td></tr>
+        <tr><td>缺放行凭据与审计</td><td><code>issue_token</code> + <code>send</code> 强制校验 + <code>audit_block</code></td><td>内容或参数变化必须重新审查</td></tr>
+        <tr><td>缺知识库依赖</td><td>收在 <code>k_agent</code> / <code>p_agent</code> 子图内部</td><td>检索是节点内部动作，不画成图节点（避免把资源层当 Agent）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="sub" id="nodes">二、主图节点清单</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>node id</th><th>中文职责</th><th>类型</th><th>依赖</th></tr></thead>
+      <tbody>
+        <tr><td><code>normalize</code></td><td>输入标准化、会话绑定与授权校验</td><td>确定性</td><td>会话 / 权限服务</td></tr>
+        <tr><td><code>emergency_screen</code></td><td>紧急风险信号预筛</td><td>规则引擎</td><td>紧急词表（带版本号）</td></tr>
+        <tr><td><code>classify</code></td><td>意图识别与槽位抽取</td><td>LLM</td><td>Qwen3-8B</td></tr>
+        <tr><td><code>dispatch</code></td><td>按意图分派（支持多意图 <code>Send</code> 并行）</td><td>规则配置</td><td>—</td></tr>
+        <tr><td><code>clarify</code></td><td>生成澄清问题草稿</td><td>LLM</td><td>Qwen3-8B</td></tr>
+        <tr><td><code>emergency_draft</code></td><td>紧急风险提示草稿 + 接管请求</td><td>模板 + LLM</td><td>预审通过的话术模板</td></tr>
+        <tr><td><code>k_agent</code></td><td>知识科普（内部 9 节点）</td><td>子图</td><td>8B / 30B / 32B / BGE-M3</td></tr>
+        <tr><td><code>r_agent</code></td><td>项目推荐</td><td>子图</td><td>8B / 30B + 业务系统</td></tr>
+        <tr><td><code>c_agent</code></td><td>资质与门店查询</td><td>子图</td><td>8B / 30B + 机构数据库</td></tr>
+        <tr><td><code>b_agent</code></td><td>预约管理</td><td>子图</td><td>8B / 30B + 预约系统</td></tr>
+        <tr><td><code>p_agent</code></td><td>术后护理与随访</td><td>子图</td><td>8B / 30B / VL / InternVL / BGE</td></tr>
+        <tr><td><code>aggregate</code></td><td>聚合待审对象：草稿 / 操作请求</td><td>确定性</td><td>—</td></tr>
+        <tr><td><code>risk_gate</code></td><td>风险审查子图</td><td>子图</td><td>见 DIAGRAM 02</td></tr>
+        <tr><td><code>feedback</code></td><td>输出修改意见并记复审次数</td><td>确定性 + 30B</td><td>—</td></tr>
+        <tr><td><code>retry_check</code></td><td>复审次数是否少于 2 次</td><td>确定性</td><td>—</td></tr>
+        <tr><td><code>revise</code></td><td>定向修订，并返回 <code>Command(goto=state["origin_agent"])</code></td><td>LLM</td><td>原 Agent 的模型</td></tr>
+        <tr><td><code>output_type</code></td><td>输出类型判定：回复 / 操作请求</td><td>确定性</td><td>—</td></tr>
+        <tr><td><code>send</code></td><td>发送已审查回复</td><td>确定性</td><td><b>强制校验 <code>release_token</code></b></td></tr>
+        <tr><td><code>await_confirm</code></td><td>等待用户明确确认</td><td><code>interrupt</code></td><td>checkpointer</td></tr>
+        <tr><td><code>execute_op</code></td><td>幂等执行已审操作</td><td>确定性</td><td>业务系统 + 幂等键</td></tr>
+        <tr><td><code>receipt</code></td><td>生成真实执行结果回复</td><td>LLM</td><td>Qwen3-30B</td></tr>
+        <tr><td><code>recheck</code></td><td>执行结果回复复审</td><td>子图</td><td><b>复用 <code>risk_gate</code></b></td></tr>
+        <tr><td><code>final_check</code></td><td>结果回复是否通过</td><td>确定性</td><td>—</td></tr>
+        <tr><td><code>human</code></td><td>创建人工接管工单</td><td>确定性</td><td>工单系统</td></tr>
+        <tr><td><code>plan_void</code></td><td>作废方案并生成通用回复</td><td>规则 + 模板</td><td>—</td></tr>
+        <tr><td><code>audit_block</code></td><td>记录规则编号并终止</td><td>确定性</td><td>审计服务</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="sub" id="edges">三、条件边清单</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>路由点</th><th>返回值</th><th>目标节点</th></tr></thead>
+      <tbody>
+        <tr><td><code>emergency_screen</code></td><td><code>hit</code> / <code>miss</code></td><td><code>emergency_draft</code> / <code>classify</code></td></tr>
+        <tr><td><code>dispatch</code></td><td><code>knowledge</code> / <code>recommend</code> / <code>clinic</code> / <code>booking</code> / <code>postcare</code> / <code>clarify</code></td><td>5 个专业 Agent / <code>clarify</code></td></tr>
+        <tr><td><code>risk_gate</code></td><td><code>pass</code> / <code>revise</code> / <code>need_info</code> / <code>block</code> / <code>human</code></td><td><code>output_type</code> / <code>feedback</code> / <code>send</code> / <code>audit_block</code> / <code>human</code></td></tr>
+        <tr><td><code>retry_check</code></td><td><code>retry</code> / <code>exhausted</code></td><td><code>revise</code> / <code>human</code></td></tr>
+        <tr><td><code>output_type</code></td><td><code>reply</code> / <code>operation</code></td><td><code>send</code> / <code>await_confirm</code></td></tr>
+        <tr><td><code>await_confirm</code></td><td><code>confirmed</code> / <code>denied</code></td><td><code>execute_op</code> / <code>plan_void</code></td></tr>
+        <tr><td><code>final_check</code></td><td><code>ok</code> / <code>fail</code></td><td><code>send</code> / <code>human</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="source-note">风险审查子图内部的条件边见 DIAGRAM 02，返回值与主图 <code>risk_gate</code> 的五个出口一一对应（<code>need_info</code> 由 <code>review_input</code> 产生，<code>block</code> 由 <code>hard_hit</code> 与 <code>verdict</code> 共同产生）。</p>
+
+  <h3 class="sub" id="knowledge-sub">三之二、知识科普子图（k_agent）节点与出口</h3>
+  <p>对应 <code>langgraph-knowledge.mmd</code>。该子图只产出带证据的待审草稿，从不直接对用户说话。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>node id</th><th>职责</th><th>模型 / 依赖</th></tr></thead>
+      <tbody>
+        <tr><td><code>kb_intake</code></td><td>任务接收与边界判断</td><td>Qwen3-8B</td></tr>
+        <tr><td><code>kb_scope</code></td><td>属于科普范围？否则转 <code>kb_handoff</code></td><td>路由规则</td></tr>
+        <tr><td><code>kb_handoff</code></td><td>返回转交建议，交回主图送审</td><td>—</td></tr>
+        <tr><td><code>kb_context</code></td><td>读取必要且经授权的上下文</td><td>权限 / 记忆服务</td></tr>
+        <tr><td><code>kb_decompose</code></td><td>解析问题并拆分检索子任务</td><td>Qwen3-8B</td></tr>
+        <tr><td><code>kb_sufficiency</code></td><td>信息是否充分？否则转 <code>kb_clarify</code></td><td>Qwen3-8B + 规则</td></tr>
+        <tr><td><code>kb_clarify</code></td><td>生成简短澄清问题，同样需要过审</td><td>Qwen3-8B</td></tr>
+        <tr><td><code>kb_retrieve</code></td><td>混合检索审核知识库，并按项目 / 状态 / 版本过滤</td><td>BGE-M3 + Reranker</td></tr>
+        <tr><td><code>kb_evidence</code></td><td>筛选证据与充分性检查</td><td>Qwen3-32B → R1</td></tr>
+        <tr><td><code>kb_evidence_ok</code></td><td>证据足以回答？否则转 <code>kb_limit</code></td><td>确定性</td></tr>
+        <tr><td><code>kb_limit</code></td><td>缩小回答范围、说明未知</td><td>规则 + 30B</td></tr>
+        <tr><td><code>kb_draft</code></td><td>生成科普草稿</td><td>Qwen3-30B-A3B</td></tr>
+        <tr><td><code>kb_verify</code></td><td>事实与引用逐项核对</td><td>Qwen3-32B → R1</td></tr>
+        <tr><td><code>kb_verified</code></td><td>重要结论均有依据？否则回到 <code>kb_draft</code></td><td>确定性</td></tr>
+        <tr><td><code>kb_return</code></td><td>返回结构化待审草稿：正文 / 引用 / 缺口 / 路由建议</td><td>Qwen3-30B-A3B</td></tr>
+        <tr><td><code>revise_in</code></td><td>跨子图入口：风险审查判「需修改」时定向进入 <code>kb_verify</code></td><td>主图 <code>revise</code></td></tr>
+        <tr><td><code>to_aggregate</code></td><td>跨子图出口：三个出口都回到主图 <code>aggregate</code></td><td>主图 <code>aggregate</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note"><b>修订为什么回到 <code>kb_verify</code> 而不是 <code>kb_draft</code>：</b>审查意见通常针对具体表述与引用，回到事实核对可以复用已通过的检索与证据，同时强制修订后的每一步重新核对，避免「改一句、错一句」。</div>
+
+  <h3 class="sub" id="state">四、state 契约（初稿）</h3>
+<pre><code>from typing import Annotated, Literal, TypedDict
+import operator
+
+
+class ZhimeiState(TypedDict, total=False):
+    # ---- 会话与入口 ----
+    thread_id: str
+    user_input: str
+    attachments: list[dict]          # 已授权、已脱敏的图片 / 文档
+    auth_context: dict               # 身份、归属关系、授权范围
+
+    # ---- 意图与分派 ----
+    intents: list[str]               # 多意图 → Send 并行扇出
+    slots: dict
+    emergency: bool
+    priority: Literal["normal", "emergency"]
+
+    # ---- 扇入收集：并行写入必须带 reducer ----
+    agent_outputs: Annotated[list[dict], operator.add]   # {agent, content, citations, gaps, route_hint}
+    panel_reviews: Annotated[list[dict], operator.add]   # 多专家意见，含命中原文与规则编号
+    audit_log: Annotated[list[dict], operator.add]
+
+    # ---- 待审对象 ----
+    review_kind: Literal["content", "operation", "result_reply", "emergency"]
+    draft: dict                      # 当前待审草稿 / 操作请求
+    evidence: list[dict]
+    operation: dict | None           # {action, params, plan_hash}
+
+    # ---- 审查结论 ----
+    hard_rule_hits: list[dict]
+    verdict: Literal["pass", "revise", "need_info", "block", "human"] | None
+    review_feedback: list[str]
+    revision_count: int              # 只由 feedback 节点累加
+    origin_agent: str                # 修订回退目标（专业 Agent 节点名）
+    release_token: str | None        # 仅 issue_token 可签发
+
+    # ---- 确认与执行 ----
+    plan_hash: str
+    confirmed: bool
+    idempotency_key: str
+    execution_result: dict | None
+
+    # ---- 人工与审计 ----
+    handoff_ticket: dict | None</code></pre>
+
+  <h3 class="sub" id="rules">五、必须写进代码的硬约束</h3>
+  <ol>
+    <li><b>凭据绑定内容。</b><code>release_token</code> = 签名(内容哈希 + <code>plan_hash</code> + <code>review_kind</code> + 过期时间)；<code>send</code> 与 <code>execute_op</code> 入口强制校验；出站网关再校验一次（图内 + 图外双保险）。</li>
+    <li><b>计数器只在代码里。</b><code>revision_count</code> 仅由 <code>feedback</code> 累加；每轮进入 <code>risk_gate</code> 前清空 <code>verdict</code> 与 <code>release_token</code>，避免读到上一轮的陈旧值。</li>
+    <li><b><code>interrupt</code> 之前无副作用。</b><code>await_confirm</code> 之前的节点会被重放，所有节点必须幂等。</li>
+    <li><b>确认绑定方案。</b>resume 时校验 <code>plan_hash</code> 与挂起时一致，且方案有有效期；不接收泛泛的"好的"。</li>
+    <li><b>外部执行恰好一次靠业务，不靠框架。</b><code>idempotency_key = f"{thread_id}:{plan_hash}"</code>，执行前查真实业务状态。</li>
+    <li><b>并行写入必须用 reducer。</b><code>aggregate</code> 是唯一扇入点，多意图 <code>Send</code> 的结果只能经它汇总。</li>
+    <li><b>显式设置 <code>recursion_limit</code>（建议 30–40）</b>，并把 <code>GraphRecursionError</code> 映射为转人工，而不是报 500。</li>
+    <li><b>checkpointer 用 Postgres，<code>durability</code> 至少 <code>async</code></b>；同一 <code>thread_id</code> 串行执行（加锁），避免并发 run 冲突。</li>
+    <li><b>模型客户端分离。</b>DeepSeek-R1 与 InternVL 走独立客户端并带家族标记，禁止同家族模型互相"确认"。</li>
+  </ol>
+
+  <h3 class="sub" id="deviations">六、故意偏离蓝图的四处</h3>
+  <ol>
+    <li><b>紧急预筛前置</b>：蓝图在 Intake 内与风险审查内各查一次；本版在 L0 前置抢时间，同时保留关卡内的 <code>emergency_check</code> 复查<b>原始消息</b>，形成"快路径 + 完整校验"双层。</li>
+    <li><b><code>need_info</code> 与 <code>plan_void</code> 也走 <code>send</code></b>：蓝图里"返回补充要求"没有明确过审；本版强制任何出站内容都带凭据，不开口子。</li>
+    <li><b>定向回退目标显式化</b>：蓝图只说「退回专业 Agent」，没画目标选择；本版在 <code>revise</code> 节点内返回 <code>Command(goto=state["origin_agent"])</code>，图上用一条回到「草稿产出层」的箭头表示，避免五条长虚线造成的视觉噪音。</li>
+    <li><b>多意图并行只在注释与文档体现</b>：图上保留互斥分支以保可读性，<code>Send</code> 扇出在实现时展开。</li>
+  </ol>
+
+  <h3 class="sub" id="scope">七、v1 明确不做</h3>
+  <ul>
+    <li>人工坐席侧的回复出站（走工单系统自己的通道，仅允许预审通用话术）</li>
+    <li>知识库写入与审核流水线</li>
+    <li>模型服务部署与路由（vLLM）—— 图内只通过 client 注入</li>
+    <li>跨轮次澄清的状态收敛（v1 先做单轮澄清）</li>
+    <li>视觉链路（<code>Qwen3-VL</code> / <code>InternVL</code>）先在 <code>p_agent</code> 内留接口，不接真实图片</li>
+  </ul>
+
+  <h3 class="sub" id="rollout">八、落地顺序</h3>
+  <p><b>第 1 步（沙箱，不接业务系统）</b></p>
+  <p><code>normalize → emergency_screen → classify → dispatch → k_agent → aggregate → risk_gate(content) → feedback → retry_check → revise → output_type → send</code></p>
+  <p>跑通"有界修订环 + 五档出口 + 凭据校验"，用假数据验证循环不会失控。</p>
+  <p><b>第 2 步（接预约系统，只读 / 预发）</b></p>
+  <p><code>await_confirm · interrupt → execute_op → receipt → recheck → final_check</code></p>
+  <p>重点验证：挂起跨小时恢复、方案哈希校验、幂等键、结果回复复审。</p>
+  <p><b>第 3 步（补齐合规出口）</b></p>
+  <p><code>block / need_info / human</code> 三个出口 + 审计落库 + <code>release_token</code> 签名与过期。</p>
+  <p><b>P1</b>：多专家并行 + R1 升级 + <code>biz_check</code> + 多意图 <code>Send</code>　<b>P2</b>：评测集 + 模型路由与降级 + 是否引入 LoRA（未达指标不训）</p>
+
+  <div class="note"><b>三处容易误读的地方：</b>① 风险审查子图里 <code>emergency_check</code> 有两条都标「是」的出边，这是故意的——紧急场景要同时放行已审风险提示并立即创建接管工单，在 LangGraph 里即一个条件边返回两个目标（同一 super-step 并行）。② 主图的修订回路画成一条回到「草稿产出层」的箭头，具体回到哪个 Agent 由 <code>state.origin_agent</code> 决定，不再展开成五条边。③ 主图、知识科普、风险审查各自成图并各自收敛，避免把 30+ 节点塞进一张总览图。</div>
+  <div class="warn"><b>渲染校验说明：</b>本页面图表由同目录 <code>mermaid.min.js</code>（10.9.3）渲染；三份 <code>.mmd</code> 是源码的唯一依据，页面内的源码块由这三个文件逐字填充。改动图表后可在本目录执行 <code>node check-mermaid.cjs</code> 做语法与引用自检。</div>
+</section>
+</main>
+
+<footer>智美医美顾问 · LangGraph 落地包 v1 · 在原有主干图上补齐 P0 后的可实现版本。本页仅为架构与契约说明，未连接任何实际预约、知识库或客服系统。</footer>
+<div id="feedback" role="status" aria-live="polite"></div>
+
+<script type="text/plain" id="src-main">
+%% 智美医美顾问 · 多 Agent 主图（LangGraph 对齐版 v2 · 排版重排）
+%% 阅读顺序（自上而下）：
+%%   L0 入口与调度 → L1 七路草稿产出 → 聚合与守门 → L3 输出与执行 → 出口层
+%%   修订回路与执行链在守门层下方左右并行，最后由出口层收敛。
+%% 命名约定：节点 id 即 add_node 名称；菱形 = add_conditional_edges 的路由点；
+%%          出边标签 = 路由函数返回值；interrupt 节点依赖 checkpointer。
+%% 子图内部结构见 langgraph-risk-gate.mmd 与 langgraph-knowledge.mmd。
+%% 预算上限（都落在路由条件里，不新增节点）：
+%%   clarify_count 达到 MAX_CLARIFY → 有可用槽位则走 k_agent 给一般性说明，否则 human_handoff
+%%   revision_count 超过 MAX_REVISION → human_handoff
+
+flowchart TB
+  U(["用户输入<br/>文本 / 图片 / 文档"])
+
+  subgraph L0["入口与调度层"]
+    normalize["输入标准化与授权校验<br/>normalize"]
+    emergency_screen{"命中紧急信号？<br/>emergency_screen"}
+    classify["意图识别与槽位抽取<br/>classify"]
+    dispatch{"按意图分派<br/>dispatch"}
+  end
+
+  subgraph L1["草稿产出层 · 七路并行，全部汇入 aggregate"]
+    k_agent["知识科普<br/>k_agent"]
+    r_agent["项目推荐<br/>r_agent"]
+    c_agent["资质与门店查询<br/>c_agent"]
+    b_agent["预约管理<br/>b_agent"]
+    p_agent["术后护理与随访<br/>p_agent"]
+    clarify["生成澄清问题<br/>clarify"]
+    emergency_draft["紧急提示与接管请求<br/>emergency_draft"]
+  end
+
+  aggregate["聚合待审对象：草稿 / 操作请求<br/>aggregate"]
+  risk_gate{"风险审查子图 · 必经关卡<br/>risk_gate"}
+
+  output_type{"输出类型<br/>output_type"}
+  await_confirm["等待用户明确确认<br/>await_confirm · interrupt"]
+  execute_op["幂等执行已审操作<br/>execute_op"]
+  receipt["生成真实执行结果回复<br/>receipt"]
+  recheck["执行结果回复复审<br/>recheck"]
+  final_check{"结果回复通过？<br/>final_check"}
+
+  feedback["记录修改意见与复审次数<br/>feedback"]
+  retry_check{"复审少于 2 次？<br/>retry_check"}
+  revise["定向修订<br/>revise"]
+  plan_void["作废方案并生成通用回复<br/>plan_void"]
+
+  subgraph EXITS["出口层 · 所有出站内容都必须持有放行凭据"]
+    send["发送已审查回复<br/>send · 校验 release_token"]
+    human_handoff["创建人工接管工单<br/>human_handoff"]
+    audit_block["记录规则编号并终止<br/>audit_block"]
+  end
+
+  %% ---------- 入口与分派 ----------
+  U --> normalize
+  normalize --> emergency_screen
+  emergency_screen -->|命中紧急信号| emergency_draft
+  emergency_screen -->|未命中| classify
+  classify --> dispatch
+  dispatch -->|科普咨询| k_agent
+  dispatch -->|项目推荐| r_agent
+  dispatch -->|门店资质| c_agent
+  dispatch -->|预约改约| b_agent
+  dispatch -->|术后护理| p_agent
+  dispatch -->|意图不明确| clarify
+
+  %% ---------- 七路扇入：唯一汇聚点 ----------
+  k_agent --> aggregate
+  r_agent --> aggregate
+  c_agent --> aggregate
+  b_agent --> aggregate
+  p_agent --> aggregate
+  clarify --> aggregate
+  emergency_draft --> aggregate
+
+  %% ---------- 必经关卡 ----------
+  aggregate --> risk_gate
+
+  %% ---------- 五档出口 ----------
+  risk_gate -->|pass 通过| output_type
+  risk_gate -->|revise 需修改| feedback
+  risk_gate -->|need_info 资料不全| send
+  risk_gate -->|block 硬性阻断| audit_block
+  risk_gate -->|human 高风险或紧急| human_handoff
+
+  %% ---------- 修订回路 ----------
+  feedback --> retry_check
+  retry_check -->|是：计数 +1| revise
+  retry_check -->|否：复审超限| human_handoff
+  revise -.->|按 state.origin_agent 回到原专业 Agent| L1
+
+  %% ---------- 输出与执行闭环 ----------
+  output_type -->|回复| send
+  output_type -->|操作请求| await_confirm
+  await_confirm -->|用户明确确认| execute_op
+  await_confirm -->|否认或方案过期| plan_void
+  execute_op --> receipt
+  receipt --> recheck
+  recheck --> final_check
+  final_check -->|是| send
+  final_check -->|否| human_handoff
+  plan_void -.->|重新送审| aggregate
+
+  %% ---------- 样式 ----------
+  classDef ent fill:#e8f1fb,stroke:#4a7fb5,stroke-width:1.5px,color:#17405f;
+  classDef agt fill:#f1eaf9,stroke:#8264ad,stroke-width:1.5px,color:#492f6b;
+  classDef gt fill:#ffe3de,stroke:#c8493a,stroke-width:2.5px,color:#8a2a1e;
+  classDef rel fill:#e6f4ee,stroke:#3f8a72,stroke-width:1.5px,color:#1a5044;
+  classDef loop fill:#eef1f4,stroke:#6b7d8a,stroke-width:1.5px,color:#384a55;
+  classDef exit fill:#fff4dd,stroke:#b3862a,stroke-width:1.5px,color:#6d4c08;
+  classDef ext fill:#f4f6f8,stroke:#a9b8c2,stroke-dasharray:4 3,color:#4f6270;
+
+  class U ext;
+  class normalize,emergency_screen,classify,dispatch ent;
+  class k_agent,r_agent,c_agent,b_agent,p_agent,clarify,emergency_draft agt;
+  class aggregate,risk_gate gt;
+  class output_type,await_confirm,execute_op,receipt,recheck,final_check rel;
+  class feedback,retry_check,revise,plan_void loop;
+  class send,human_handoff,audit_block exit;
+
+  style L0 fill:#fbfcfe,stroke:#ccd9e4,stroke-width:1px
+  style L1 fill:#fcfbfe,stroke:#ddd2ec,stroke-width:1px
+  style EXITS fill:#fffdf6,stroke:#e6d6b0,stroke-width:1px
+</script>
+
+<script type="text/plain" id="src-knowledge">
+%% 智美医美顾问 · 知识科普 Agent 子图（主图中的 k_agent）内部结构
+%% 边界契约：
+%%   入口 1：主图 dispatch 按「科普咨询」意图分派进入 kb_intake
+%%   入口 2：主图 risk_gate 判定「需修改」时，revise 定向回到 kb_draft 重新生成
+%%           （★ 跑起来才发现：只回到 kb_verify 是"只核对不重生成"，内容没变，
+%%             审查必然再次命中同一条规则，白白耗尽修订预算）
+%%   出口：kb_return / kb_clarify / kb_handoff 三个出口都回到主图 aggregate，统一送风险审查
+%% 铁律：本子图只产出「带证据的待审草稿」，不直接对用户说话。
+
+flowchart TB
+  revise_in(["主图 revise · 定向修订<br/>revise_in"])
+
+  kb_intake["1. 任务接收与边界判断<br/>kb_intake · Qwen3-8B"]
+  kb_scope{"属于科普范围？<br/>kb_scope"}
+  kb_handoff["返回转交建议<br/>kb_handoff"]
+  kb_context["2. 读取必要且经授权的上下文<br/>kb_context · 权限 / 记忆服务"]
+  kb_decompose["3. 解析问题并拆分检索子任务<br/>kb_decompose · Qwen3-8B"]
+  kb_sufficiency{"信息是否充分？<br/>kb_sufficiency"}
+  kb_clarify["生成简短澄清问题<br/>kb_clarify · Qwen3-8B"]
+
+  subgraph EVIDENCE["已审核资料与证据处理"]
+    kb_retrieve["4. 混合检索审核知识库<br/>kb_retrieve · BGE-M3 + Reranker"]
+    kb_evidence["5. 证据筛选与充分性检查<br/>kb_evidence · Qwen3-32B → R1"]
+  end
+
+  kb_evidence_ok{"证据足以回答？<br/>kb_evidence_ok"}
+  kb_limit["缩小回答范围、说明未知<br/>kb_limit"]
+  kb_draft["6. 生成科普草稿<br/>kb_draft · Qwen3-30B-A3B"]
+  kb_verify["7. 事实与引用逐项核对<br/>kb_verify · Qwen3-32B → R1"]
+  kb_verified{"重要结论均有依据？<br/>kb_verified"}
+  kb_return["8. 返回结构化待审草稿<br/>kb_return · 正文 / 引用 / 缺口 / 路由建议"]
+
+  to_aggregate(["回主图 aggregate<br/>统一送风险审查<br/>to_aggregate"])
+
+  %% ---------- 主干 ----------
+  kb_intake --> kb_scope
+  kb_scope -->|否：诊断、异常症状或预约操作| kb_handoff
+  kb_scope -->|是| kb_context
+  kb_context --> kb_decompose
+  kb_decompose --> kb_sufficiency
+  kb_sufficiency -->|否：缺失信息会影响回答| kb_clarify
+  kb_sufficiency -->|是，或不影响一般科普| kb_retrieve
+
+  kb_retrieve --> kb_evidence
+  kb_evidence --> kb_evidence_ok
+  kb_evidence_ok -->|否| kb_limit
+  kb_evidence_ok -->|是| kb_draft
+  kb_limit --> kb_draft
+
+  kb_draft --> kb_verify
+  kb_verify --> kb_verified
+  kb_verified -->|否：回到生成，重新核对| kb_draft
+  kb_verified -->|是| kb_return
+
+  %% ---------- 出口：三个出口都回主图送审 ----------
+  kb_handoff --> to_aggregate
+  kb_clarify --> to_aggregate
+  kb_return --> to_aggregate
+
+  %% ---------- 修订再入 ----------
+  revise_in -.->|按审查意见重新生成，再走一遍事实核对| kb_draft
+
+  %% ---------- 样式 ----------
+  classDef step fill:#e6f4ee,stroke:#3f8a72,stroke-width:1.5px,color:#1a5044;
+  classDef dec fill:#fff4dd,stroke:#b3862a,stroke-width:1.5px,color:#6d4c08;
+  classDef ret fill:#e8f1fb,stroke:#4a7fb5,stroke-width:1.5px,color:#17405f;
+  classDef stop fill:#ffe3de,stroke:#c8493a,stroke-width:2px,color:#8a2a1e;
+  classDef ext fill:#f4f6f8,stroke:#a9b8c2,stroke-dasharray:4 3,color:#4f6270;
+
+  class kb_intake,kb_context,kb_decompose,kb_draft,kb_verify,kb_return step;
+  class kb_scope,kb_sufficiency,kb_evidence_ok,kb_verified dec;
+  class kb_retrieve,kb_evidence ret;
+  class kb_limit,kb_clarify,kb_handoff stop;
+  class revise_in,to_aggregate ext;
+
+  style EVIDENCE fill:#fbfcfe,stroke:#ccd9e4,stroke-width:1px
+</script>
+
+<script type="text/plain" id="src-gate">
+%% 智美医美顾问 · 风险审查子图（主图中的 risk_gate）内部结构
+%% 同一份编译后的子图被调用三次：
+%%   review_kind = content      审查专业 Agent 草稿 / 澄清问题 / 紧急提示
+%%   review_kind = operation    审查待确认的操作方案
+%%   review_kind = result_reply 审查真实执行结果回复（由主图 recheck 节点调用）
+%% 终止出口：issue_token 放行 / need_info 补件 / block 阻断 / handoff 转人工
+%% 修订出口：feedback → retry_check → resubmit 重新进入 gate_in（有次数上限）
+
+flowchart TB
+  gate_in(["审查请求标准化<br/>gate_in"])
+
+  review_input{"输入完整且具备权限？<br/>review_input"}
+  need_info["要求补充或阻止执行<br/>need_info"]
+  emergency_check{"原始消息命中紧急信号？<br/>emergency_check"}
+
+  hard_rules["确定性硬规则检查<br/>hard_rules"]
+  hard_hit{"命中硬性阻断？<br/>hard_hit"}
+  block["阻止执行并记录规则编号<br/>block"]
+
+  expert_panel["多专家并行审查<br/>expert_panel"]
+  escalate{"高风险或意见冲突？<br/>escalate"}
+  r1_review["DeepSeek-R1 独立复核<br/>r1_review"]
+
+  op_check{"是否敏感操作？<br/>op_check"}
+  biz_check["业务校验：状态与执行条件<br/>biz_check"]
+
+  merge_verdict["聚合硬规则与专家意见<br/>merge_verdict"]
+  verdict{"审查结论<br/>verdict"}
+
+  feedback["输出修改意见并记次数<br/>feedback"]
+  retry_check{"低于最大复审次数？<br/>retry_check"}
+  resubmit["修订后重新提交<br/>resubmit"]
+
+  issue_token["签发放行凭据并写审计<br/>issue_token"]
+  handoff["创建人工接管任务<br/>handoff"]
+
+  %% ---------- 主干 ----------
+  gate_in --> review_input
+  review_input -->|否：资料不全或无权限| need_info
+  review_input -->|是| emergency_check
+  emergency_check -->|是：放行已审风险提示| issue_token
+  emergency_check -->|是：立即创建人工接管| handoff
+  emergency_check -->|否| hard_rules
+
+  hard_rules --> hard_hit
+  hard_hit -->|是| block
+  hard_hit -->|否| expert_panel
+
+  expert_panel --> escalate
+  escalate -->|是| r1_review
+  escalate -->|否| op_check
+  r1_review --> op_check
+
+  op_check -->|是| biz_check
+  op_check -->|否| merge_verdict
+  biz_check --> merge_verdict
+
+  merge_verdict --> verdict
+  verdict -->|pass 通过| issue_token
+  verdict -->|revise 需修改| feedback
+  verdict -->|block 硬性阻断| block
+  verdict -->|human 高风险| handoff
+
+  %% ---------- 修订回路 ----------
+  feedback --> retry_check
+  retry_check -->|是：计数加一| resubmit
+  resubmit --> gate_in
+  retry_check -->|否：超限| handoff
+
+  %% ---------- 样式 ----------
+  classDef io fill:#e8f1fb,stroke:#4a7fb5,stroke-width:1.5px,color:#17405f;
+  classDef dec fill:#fff4dd,stroke:#b3862a,stroke-width:1.5px,color:#6d4c08;
+  classDef rul fill:#ffe3de,stroke:#c8493a,stroke-width:1.5px,color:#8a2a1e;
+  classDef mdl fill:#e6f4ee,stroke:#3f8a72,stroke-width:1.5px,color:#1a5044;
+  classDef hum fill:#f1eaf9,stroke:#8264ad,stroke-width:1.5px,color:#492f6b;
+
+  class gate_in,issue_token io;
+  class review_input,emergency_check,hard_hit,escalate,op_check,verdict,retry_check dec;
+  class hard_rules,block,need_info,biz_check,merge_verdict,feedback,resubmit rul;
+  class expert_panel,r1_review mdl;
+  class handoff hum;
+</script>
+
+<script src="./mermaid.min.js"></script>
+<script>
+const cards=[...document.querySelectorAll('.diagram-card')];
+const sources={};
+cards.forEach(card=>{
+  const el=document.getElementById('src-'+card.dataset.graph);
+  sources[card.dataset.graph]=el.textContent.replace(/^\s*\n/,'').trim()+'\n';
+  card.querySelector('pre code').textContent=sources[card.dataset.graph];
+});
+
+let feedbackTimer;
+function notify(text){
+  const box=document.querySelector('#feedback');
+  box.textContent=text;
+  clearTimeout(feedbackTimer);
+  feedbackTimer=setTimeout(()=>{box.textContent='';},4000);
+}
+function download(content,type,name){
+  const url=URL.createObjectURL(new Blob([content],{type}));
+  const link=document.createElement('a');
+  link.href=url;link.download=name;link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+cards.forEach(card=>{
+  const diagram=card.querySelector('.diagram');
+  const minus=card.querySelector('[data-action="minus"]');
+  const plus=card.querySelector('[data-action="plus"]');
+  const svgButton=card.querySelector('[data-action="svg"]');
+  const zoomLabel=card.querySelector('.zoom-label');
+  let zoom=100;
+
+  function applyZoom(){
+    diagram.style.width=zoom+'%';
+    diagram.style.minWidth=(1000*zoom/100)+'px';
+    zoomLabel.textContent=zoom+'%';
+    minus.disabled=zoom===50;
+    plus.disabled=zoom===200;
+  }
+  minus.addEventListener('click',()=>{zoom=Math.max(50,zoom-25);applyZoom();});
+  plus.addEventListener('click',()=>{zoom=Math.min(200,zoom+25);applyZoom();});
+  card.querySelector('[data-action="reset"]').addEventListener('click',()=>{zoom=100;applyZoom();});
+
+  card.querySelector('[data-action="mmd"]').addEventListener('click',()=>{
+    download(sources[card.dataset.graph],'text/plain;charset=utf-8',card.dataset.file);
+    notify('已下载 '+card.dataset.file);
+  });
+  svgButton.addEventListener('click',()=>{
+    const svg=diagram.querySelector('svg');
+    if(!svg){notify('图表尚未渲染完成');return;}
+    const clone=svg.cloneNode(true);
+    clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    const box=(clone.getAttribute('viewBox')||'0 0 0 0').split(/\s+/);
+    clone.setAttribute('width',box[2]);
+    clone.setAttribute('height',box[3]);
+    download(new XMLSerializer().serializeToString(clone),'image/svg+xml;charset=utf-8',card.dataset.file.replace('.mmd','.svg'));
+    notify('已下载 SVG');
+  });
+  applyZoom();
+});
+
+async function render(){
+  if(!window.mermaid){
+    cards.forEach(card=>{
+      card.querySelector('.render-status').textContent='渲染库未加载：请将 mermaid.min.js 放在本 HTML 同一目录，再刷新。仍可展开下方源码，或下载 .mmd 后在其他编辑器查看。';
+      card.querySelector('details').open=true;
+    });
+    return;
+  }
+  mermaid.initialize({
+    startOnLoad:false,
+    securityLevel:'strict',
+    theme:'base',
+    fontFamily:'Microsoft YaHei, PingFang SC, sans-serif',
+    themeVariables:{
+      primaryColor:'#edf4fa',primaryTextColor:'#19344a',primaryBorderColor:'#7396b0',
+      lineColor:'#678294',secondaryColor:'#eaf5f1',tertiaryColor:'#f6f8fb',
+      noteBkgColor:'#fff6df',noteTextColor:'#704d0a',noteBorderColor:'#c6a250',fontSize:'15px'
+    },
+    flowchart:{htmlLabels:false,curve:'basis',nodeSpacing:30,rankSpacing:50}
+  });
+  for(const [index,card] of cards.entries()){
+    try{
+      const {svg}=await mermaid.render('zhimei-lg-'+index,sources[card.dataset.graph]);
+      card.querySelector('.diagram').innerHTML=svg;
+      card.querySelector('.render-status').remove();
+      card.querySelector('[data-action="svg"]').disabled=false;
+    }catch(error){
+      card.querySelector('.render-status').textContent='此图渲染失败：'+(error&&error.message?error.message:'未知错误')+'。请展开下方 Mermaid 源码，或下载 .mmd 后在其他编辑器查看。';
+      card.querySelector('details').open=true;
+      console.error(error);
+    }
+  }
+}
+render();
+</script>
+</body>
+</html>

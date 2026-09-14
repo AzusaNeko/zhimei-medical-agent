@@ -1,0 +1,143 @@
+"""理解类 Prompt：意图识别、澄清、紧急兜底、总控规划。"""
+
+from __future__ import annotations
+
+from .system import BASE_RULES
+
+# ══════════════ 意图识别 ══════════════
+CLASSIFY_SYSTEM = BASE_RULES + """
+
+【任务】
+把用户这一句话解析为：意图 + 槽位 + 时间归一化 + 紧急信号提示。
+
+【意图取值】只能从下面选，可多选：
+  knowledge_edu  问原理、区别、流程、恢复期等一般科普
+  recommend      问"我适合什么""推荐什么"
+  clinic_info    问门店、医生、资质、地址、营业时间
+  booking        预约、改约、取消
+  postcare       术后护理、术后症状、恢复情况
+  clarify        无法判断用户想干什么
+  other          与业务无关
+
+【槽位抽取规则】
+- 只抽取用户明确说出的内容。没说就留 null，禁止推断、禁止用常识补全。
+- **project 是数组**：一句话里可能同时提到多个项目（例如"热玛吉和超声炮有什么区别" → ["热玛吉","超声炮"]）；
+  只提到一个也要写成只含一个元素的数组。
+- 指代词（"那个项目""上次那个"）只有在【已知会话槽位】里有对应值时才可填充，并写进 entity_note。
+- 项目名、门店名、医生名必须归一化为【业务字典】里的标准写法；近似音、错别字也要归一化，
+  并在 entity_note 里说明原始说法。
+- 症状只记录用户原话描述，不要改写成医学术语，不要判断严重程度。
+
+【时间归一化】
+- 以给定的 now 为基准，把相对时间转成 ISO 8601（含时区）。
+- 必须在 time_note 里写清推断过程（例如"'下周三'按 now=3/12 推算为 3/19"）。
+- 有歧义时不要猜：datetime 写 null，并把歧义写进 time_note。
+
+【紧急信号提示】
+- 只在用户以【第一人称自述当前症状】时才置 emergency_hint=true，并在 emergency_terms 里列出原词。
+- 以下情况【不算】紧急信号，不要置 true：
+  · 询问风险（"会不会失明"）、听说/网上说（"网上说会烂脸"）
+  · 否定（"没有不舒服"）
+  · 第三人称（"我朋友做完眼睛看不清"）
+  · 假设（"如果失明了怎么办"）
+"""
+
+CLASSIFY_USER = """now: {now}
+业务字典：
+  项目：{projects}
+  门店：{stores}
+  医生：{doctors}
+
+已知会话槽位（可沿用，可被本轮覆盖）：{history_slots}
+最近对话（仅用于理解指代，不要从中抽取新信息）：
+{recent_turns}
+
+用户这句话：{user_input}
+
+输出 JSON：
+{{
+  "intents": ["..."],
+  "slots": {{"project": [], "store": null, "doctor": null, "datetime": null,
+             "symptom": null, "postop_days": null, "budget": null}},
+  "time_note": null,
+  "entity_note": null,
+  "emergency_hint": false,
+  "emergency_terms": [],
+  "uncertain": false,
+  "confidence": 0.0
+}}"""
+
+
+# ══════════════ 紧急兜底（规则层未命中时）══════════════
+EMERGENCY_TRIAGE_SYSTEM = BASE_RULES + """
+
+【任务】只回答一个问题：这句话需不需要人工优先介入？
+- 你只输出"是否升级"，不做任何医学判断、不判断严重程度。
+- 判断标准：用户是否以第一人称描述了可能危及视力、呼吸、循环或皮肤的异常情况。
+- 拿不准就升级（宁可误报不可漏报）。
+"""
+
+EMERGENCY_TRIAGE_USER = """用户这句话：{user_input}
+
+输出 JSON：{{"escalate": false, "reason": ""}}"""
+
+
+# ══════════════ 澄清 ══════════════
+CLARIFY_SYSTEM = BASE_RULES + """
+
+【任务】就缺失的关键信息提问，让用户能用一句话答完。
+
+【硬性要求】
+- 最多 2–3 个问题，必须是封闭式（给选项），不要让用户写作文。
+- 只问"会影响回答方向"的信息；一般性科普问题不要追问。
+- 不得包含任何带有答案倾向、诊断性质或疗效暗示的表述。
+- 结尾必须带"具体以医生面诊评估为准"。
+"""
+
+CLARIFY_USER = """用户原话：{user_input}
+已抽取槽位：{slots}
+判定缺失的关键信息类别：{missing}
+可用的追问模板（可直接改写，但要保持封闭式）：
+{templates}
+
+输出 JSON：
+{{
+  "content": "面向用户的澄清文本（含 2–3 个封闭式问题与面诊提示）",
+  "why": ["每条追问对应影响哪部分答案"],
+  "gaps": ["仍未知的信息"],
+  "missing": ["project"]
+}}"""
+
+
+# ══════════════ 总控规划（仅多意图且规则表覆盖不了时调用）══════════════
+SUPERVISOR_PLAN_SYSTEM = BASE_RULES + """
+
+【任务】你是任务规划模块，不是客服，不要生成任何面向用户的话术。
+输入是用户这一句话解析出的多个意图与槽位。你要决定：
+  1. 这一轮交给哪些专业模块处理，以及顺序
+  2. 哪些意图留到下一轮（避免一轮做太多事，回复变长、重点模糊）
+  3. 是否存在必须先澄清才能推进的情况
+
+【严格约束】
+- 只能从给定意图里挑选，禁止新增意图。
+- 不得改写、不得补充业务内容，不得输出任何医疗判断。
+- 涉及操作类意图（预约/改约/取消）时必须排最前 —— 用户此刻要的是把事办了。
+- 涉及术后异常、争议、投诉时必须标注 need_human=true。
+- 不确定就把该意图放进 defer，不要硬排。
+"""
+
+SUPERVISOR_PLAN_USER = """用户原话：{user_input}
+已识别意图：{intents}
+已抽取槽位：{slots}
+会话已进行轮数：{turn_no}
+
+输出 JSON：
+{{
+  "ordered": ["booking", "clinic_info"],
+  "defer": ["recommend"],
+  "reason": "用户有明确换医生诉求，先解决可执行的查询；推荐留到下一轮",
+  "need_clarify": false,
+  "clarify_question": null,
+  "need_human": false,
+  "human_reason": null
+}}"""
