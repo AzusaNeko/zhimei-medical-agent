@@ -1,7 +1,12 @@
-# 统一换行：仓库里一律存 LF，检出时按平台转换。
-# 不加这条的话，Windows 上每次提交都会刷一屏 "LF will be replaced by CRLF" 警告，
-# 而且同一份文件在不同机器上会显示成"整文件被改动"，看不出真正的改动。
-* text=auto
+# 统一换行：仓库里一律存 LF，检出时也用 LF。
+#
+# 为什么必须显式写 `eol=lf`，而不是只写 `text=auto`：
+#   本机 **系统级** git 配置里 core.autocrlf=true，只写 text=auto 的话
+#   每次新增/修改文件都会刷一屏 "LF will be replaced by CRLF" 警告；
+#   更麻烦的是同一份文件在不同机器上会显示成"整文件被改动"，
+#   真正的改动反而淹没在噪音里。写死 eol=lf 后，行为不再取决于
+#   谁在哪台机器上的 git 配置，仓库内容与检出内容完全一致。
+* text=auto eol=lf
 
 # 这些是二进制，绝不能让 git 去做换行转换（会直接损坏文件）
 *.png  binary

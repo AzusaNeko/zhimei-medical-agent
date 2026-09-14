@@ -1,9 +1,21 @@
 # 智美医美顾问 MVP · 独立依赖栈
 #
-#   docker compose -p zhimei up -d
-#   docker compose -p zhimei ps
-#   docker compose -p zhimei down          # 停止（保留数据卷）
-#   docker compose -p zhimei down -v       # 停止并删除数据（不可逆）
+#   docker compose up -d
+#   docker compose ps
+#   docker compose down          # 停止（保留数据卷）
+#   docker compose down -v       # 停止并删除数据（不可逆）
+#
+# ★★ 为什么这里必须写死项目名 `name: zhimei`（踩过一次，代价很大）★★
+#
+#   项目名决定了数据卷的最终名字：`<项目名>_zhimei-pg-data`。
+#   原来项目名只靠命令行的 `-p zhimei` 提供，一旦忘了这个参数，compose 就按
+#   **当前目录名**推导出项目名 `code`，于是——
+#     · 它认为这是一套全新的栈，去创建 `code_zhimei-pg-data` 等**一批空卷**；
+#     · 应用连上后：29 张表没了、知识库检索为空；
+#     · 全程**没有任何警告**，看起来就像"数据被删了"。
+#   数据其实一直在 `zhimei_zhimei-pg-data` 里（当时 76 MB），只是挂错了卷。
+#   把 `name:` 写进文件后，`docker compose up -d` 无论从哪个目录、加不加 -p，
+#   都必定命中正确的项目与数据卷 —— 这种"靠人记得加参数"的设计本身就是缺陷。
 #
 # 端口刻意与其它项目错开，可与本机已有实例共存：
 #   Postgres 55432（本机其它项目占用 5433 / 5434）
@@ -19,6 +31,8 @@
 #
 # Milvus standalone 由三个容器组成（etcd 元数据 / minio 对象存储 / milvus 本体），
 # 这是官方推荐的单机部署形态。
+
+name: zhimei
 
 services:
   postgres:
