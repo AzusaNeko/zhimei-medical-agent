@@ -54,6 +54,11 @@ def build_risk_subgraph(deps: Deps):
             panel_reviews=state.get("panel_reviews") or [],
             escalation_used=bool(state.get("escalation_used")),
             escalation_independent=bool(state.get("escalation_independent")),
+            # ★ 把"为什么升级"直接落库。
+            #   原来只有一个 escalation_used 布尔值，想知道原因只能把 panel_reviews
+            #   这个 JSONB 摊开反推 —— 上面那条"93% 的升级是浪费"的结论就是这么挖出来的，
+            #   花了三条 SQL。原因本来就是判定函数的返回值，顺手写下来几乎零成本。
+            escalation_reason=_reason_of(state) if state.get("escalation_used") else None,
             model_versions={r: s.model for r, s in deps.llm.roles.items()}
             if hasattr(deps.llm, "roles") else {})
         hits = state.get("hard_rule_hits") or []
@@ -163,20 +168,14 @@ def build_risk_subgraph(deps: Deps):
         return {}
 
     def should_escalate(state: dict) -> str:
-        reviews = [r for r in (state.get("panel_reviews") or [])
-                   if r.get("round") == state.get("review_round")]
-        if not reviews:
-            return "escalate"
+        return "escalate" if _reason_of(state) else "skip"
+
+    def _reason_of(state: dict) -> str | None:
+        """当前轮是否需要二次复核，以及原因。判定规则见模块级的 escalation_reason。"""
+        reviews = _round_reviews(state)
         tags = T.dedupe([t for r in reviews for t in (r.get("risk_tags") or [])])
-        if deps.rules.has_high_risk_tag(tags):
-            return "escalate"
-        if _has_conflict(reviews):
-            return "escalate"
-        if any(r.get("abstain") for r in reviews):
-            return "escalate"
-        if min((r.get("confidence") or 0.0) for r in reviews) < 0.6:
-            return "escalate"
-        return "skip"
+        return escalation_reason(reviews=reviews,
+                                 high_risk=deps.rules.has_high_risk_tag(tags))
 
     async def escalate_review(state: dict) -> dict:
         """
@@ -184,8 +183,7 @@ def build_risk_subgraph(deps: Deps):
         ESCALATION_MODEL 一旦填了别家模型，这里立刻变成真独立复核（图代码不变）。
         """
         independent = deps.llm.family_of("escalation") != deps.llm.family_of("review_medical")
-        first = [r for r in (state.get("panel_reviews") or [])
-                 if r.get("round") == state.get("review_round")]
+        first = _round_reviews(state)
         payload = P.render_escalation_input(
             (state.get("draft") or {}).get("content", ""),
             render_evidence(state.get("evidence") or []), first)
@@ -200,7 +198,9 @@ def build_risk_subgraph(deps: Deps):
             await deps.pg.note_same_family_review(state.get("thread_id") or "")
         return {"panel_reviews": [{**data, "role": "escalation", "independent": independent,
                                    "round": state.get("review_round", 0)}],
-                "escalation_used": True, "escalation_independent": independent}
+                "escalation_used": True, "escalation_independent": independent,
+                "audit_log": [{"event": "escalate_review", "independent": independent,
+                               "reason": _reason_of(state)}]}
 
     # ══════════════ 6 敏感操作业务校验 ══════════════
     async def check_op(state: dict) -> dict:
@@ -317,3 +317,79 @@ def _has_conflict(reviews: list[dict]) -> bool:
     """专家意见冲突：有人判 high、有人判 low，且都不是 abstain。"""
     levels = {r.get("level") for r in reviews if not r.get("abstain")}
     return "high" in levels and "low" in levels
+
+
+def _round_reviews(state: dict) -> list[dict]:
+    """取**当前审查轮次**的意见。
+
+    panel_reviews 会跨轮累积（修订后重新送审是新一轮），所以任何只看"这一轮结论"
+    的判断都必须先按 round 过滤 —— 漏了就会把上一轮的结论混进来，
+    表现为"明明改好了却还按老问题处理"。
+    """
+    rnd = state.get("review_round")
+    return [r for r in (state.get("panel_reviews") or []) if r.get("round") == rnd]
+
+
+# ══════════════════════════════════════════════════════════════
+#  二次复核的触发判定（纯函数，便于单测）
+# ══════════════════════════════════════════════════════════════
+
+#: 低置信度阈值。低于它"可能"需要复核 —— 但**单凭它不足以触发**，理由见下。
+LOW_CONFIDENCE = 0.6
+
+REASON_NO_REVIEWS = "no_reviews"        # 三份意见一份都没拿到
+REASON_HIGH_TAG = "high_risk_tag"       # 命中高风险标签
+REASON_CONFLICT = "conflict"            # 三份意见互相矛盾
+REASON_ABSTAIN = "abstain"              # 有面板明确表示"无法判断"
+REASON_LOW_CONF = "low_confidence"      # 置信度偏低，且确实有值得复核的判断
+
+
+def _all_clean_low(reviews: list[dict]) -> bool:
+    """三份意见都判 low 且都没有 findings —— 即"检查过了，没问题"。"""
+    return all(r.get("level") == "low" and not r.get("findings") for r in reviews)
+
+
+def escalation_reason(*, reviews: list[dict], high_risk: bool,
+                      min_confidence: float = LOW_CONFIDENCE) -> str | None:
+    """返回"为什么需要二次复核"；None 表示不需要。
+
+    ★ 关于"低置信度"的一条反直觉规则（实测数据推出来的，别轻易改回去）
+
+      原来的写法是：`min(confidence) < 0.6` 就直接升级。跑下来升级率 46%，
+      而把审计里的 JSONB 摊开一看：
+
+        45 次升级中，**42 次三个面板全都给了 level=low 且没有任何 findings**。
+
+      也就是说：三个面板都明确表态"低风险、没发现问题"，闸门却因为一个数字
+      又烧了一次复核调用（四个审查角色 = 成本 +33%），而且这次复核与首审**同族**
+      （单模型下 escalation 与 review_medical 是同一个模型），既没有独立性
+      也没有新信息。
+
+      更根本的问题是：**LLM 自报的 confidence 不是校准过的概率。**
+      实测分布是量子化的 —— 218 次 0.9、37 次 0.4、12 次 0.6，其余零散。
+      模型是在几个档位里挑一个，不是在做概率估计。拿 0.6 去卡这种数字，
+      等于让闸门取决于模型这次挑中了哪一档。
+
+      所以：**只有在确实存在"值得复核的判断"时，低置信度才构成升级理由。**
+      三个面板全 low 且无 findings 时，低置信度只是数值噪声，不是风险信号。
+
+    ★ 但 `abstain` 仍然一律升级，没有加同样的豁免。
+
+      理由是两者性质不同：abstain 是面板**明确表态"我判断不了"**，
+      这在合规闸门上必须保守对待。它现在之所以贡献了 40% 的升级，
+      根源是 Prompt 没定义清楚 abstain 的含义（把"我没发现问题"也当成了
+      "我不确定"）—— 那要修 Prompt，而不是在这里给它开豁免。
+      修完 Prompt 后如果 abstain 率仍然很高，说明面板 Prompt 还需要改，
+      而不是说明这道闸门错了。
+    """
+    if not reviews:
+        return REASON_NO_REVIEWS
+    if high_risk:
+        return REASON_HIGH_TAG
+    if _has_conflict(reviews):
+        return REASON_CONFLICT
+    if any(r.get("abstain") for r in reviews):
+        return REASON_ABSTAIN
+    if min((r.get("confidence") or 0.0) for r in reviews) < min_confidence:
+        return None if _all_clean_low(reviews) else REASON_LOW_CONF
+    return None

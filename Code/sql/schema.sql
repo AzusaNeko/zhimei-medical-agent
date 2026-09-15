@@ -104,6 +104,10 @@ CREATE TABLE IF NOT EXISTS app.review_audit (
   panel_reviews  JSONB NOT NULL DEFAULT '[]',
   escalation_used        BOOLEAN NOT NULL DEFAULT false,
   escalation_independent BOOLEAN,               -- ★ MVP 为 false（同族复核），必须如实记录
+  -- ★ 为什么升级：high_risk_tag | conflict | abstain | low_confidence | no_reviews
+  --   只有布尔值的话，想知道原因得把 panel_reviews 摊开反推（真这么干过，花了三条 SQL）。
+  --   原因本来就是判定函数的返回值，顺手写下来几乎零成本。
+  escalation_reason      TEXT,
   model_versions JSONB NOT NULL DEFAULT '{}',
   token_id       TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()

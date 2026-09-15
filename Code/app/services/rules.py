@@ -20,6 +20,15 @@ from . import text as T
 #: 等级优先级：取"最高档"时用它排序（数字越小越紧急）
 TIER_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 
+#: 询问"会不会发生 / 正不正常 / 要多久"的句式。
+#: 只用于抑制**泛词**分支（疼/肿/红…），不影响明确症状词表 —— 理由见 match_emergency。
+_POSSIBILITY_Q = re.compile(
+    r"(会不会|会不|会[^，。？！；,?!;]{0,6}吗|正常吗|要紧吗|严重吗|需要几天|几天|多久|多长时间|为什么|为啥)")
+
+#: "此刻正在发生"的表述。有它就说明这句话不只是提问，而是在自述症状 → 不抑制。
+#: 例：「我脸肿了要紧吗」既有 了 也有 要紧吗，必须按症状处理。
+_CURRENT_STATE_MARKERS = ("了", "现在", "已经", "一直", "还在")
+
 
 @dataclass(frozen=True)
 class RuleHit:
@@ -106,22 +115,32 @@ class RuleEngine:
         """
         按子句判定，返回命中的最高优先级信号（P0 命中即返回 P0）。
 
-        四种抑制规则（见 rules.yaml 的注释）：
+        抑制规则（见 rules.yaml 的注释）：
           · 询问风险：疑问词出现在症状词【之前】→ 不是自述症状
           · 否定：否定词紧邻症状词之前 → 不算
           · 第三人称/假设：出现在症状词之前 → 不算
           · 泛词不单独触发：疼/肿/红 必须与程度词或部位词共现
+          · **泛词出现在"询问可能性/时间线"的句子里 → 不算**（见 _is_possibility_question）
+
+        ★ 最后一条只作用于泛词分支，不作用于明确症状词表，这是有意的：
+          "看不清 / 呼吸困难 / 脸发白" 无论用什么句式问出来，都是需要立即处理的
+          症状描述；而"脸会肿吗 / 脸有点肿正常吗"只是在问可能性，不是自述。
+          拿实测的误报来说：**"做完热玛吉脸会肿吗"** 被判成了 P1 紧急，
+          给用户发了急诊提示模板、还开了一张 P1 工单，而用户真正的问题没人回答。
         """
         hits: list[EmergencyHit] = []
         for clause in T.split_clauses(raw_text):
             # ① 泛词（疼/肿/红…）：单独出现不算，必须与程度词或部位词共现 → P1
+            possibility_q = self._is_possibility_question(clause)
             for term, idx in T.find_terms(clause, self.generic_terms):
+                if possibility_q:
+                    continue
                 if self._suppressed(clause, term, idx):
                     continue
                 if not self._has_cooccurrence(clause):
                     continue
                 hits.append(EmergencyHit("P1", "generic_amplified", term, clause))
-            # ② 分级词表
+            # ② 分级词表（明确症状词：不受"询问可能性"影响，保持宁可误报）
             for tier in ("P0", "P1", "P2"):
                 for group in self.emergency_tiers.get(tier, []):
                     for term, idx in T.find_terms(clause, group.get("terms", [])):
@@ -138,6 +157,19 @@ class RuleEngine:
         # ★ 按等级排序：调用方普遍取"最高档"，如果顺序随机会出现
         #   "命中了 P0 却按 P1 处理"的严重漏判
         return sorted(out, key=lambda h: TIER_ORDER.get(h.tier, 9))
+
+    def _is_possibility_question(self, clause: str) -> bool:
+        """这句话是在"问会不会发生 / 正不正常 / 要多久"，而不是在自述当前症状。
+
+        ★ 判定必须带一个"当前状态标记"的例外：`我脸肿了要紧吗` 既是提问、
+          也是在自述已经肿了 —— 那种必须照常按症状处理。
+          所以只有「像在问可能性」**且**「没有任何此刻状态的表述」时才抑制。
+          这个例外是为了守住"宁可误报，不可漏报"：宁可多问一句，也不要把
+          一个正在发生的症状当成闲聊。
+        """
+        if not _POSSIBILITY_Q.search(clause):
+            return False
+        return not any(m in clause for m in _CURRENT_STATE_MARKERS)
 
     def _suppressed(self, clause: str, term: str, idx: int) -> bool:
         # 否定：紧邻在词前（最多 3 字窗口）

@@ -90,6 +90,12 @@ class Settings:
     t_understand: float = field(default_factory=lambda: _f("T_UNDERSTAND", 8))
     t_generate: float = field(default_factory=lambda: _f("T_GENERATE", 30))
     t_review: float = field(default_factory=lambda: _f("T_REVIEW", 20))
+    #: 检索（Milvus 混合检索）超时预算。
+    #: ★ 必须有这个预算：实测 Milvus 一次 "inconsistent requery result" 会让
+    #:   pymilvus 内部重试 75 次、跨 30 分钟才返回 —— 那一轮对话就挂在那里，
+    #:   图里的降级逻辑一次都跑不到（因为调用根本没返回）。
+    #:   正常情况检索 5 条数据是毫秒级，10 秒已经极其宽松。
+    t_recall: float = field(default_factory=lambda: _f("T_RECALL", 10))
 
     # ── 检索 ──
     recall_k: int = field(default_factory=lambda: _i("RECALL_K", 40))

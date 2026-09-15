@@ -131,12 +131,31 @@ def build_knowledge_subgraph(deps: Deps):
                 query_text=q["query_text"], query_dense=dense, query_sparse=sparse,
                 projects=projects, top_k=deps.settings.recall_k)
 
-        groups = await asyncio.gather(*(
-            one(q, d, s) for q, d, s in zip(queries, vecs["dense"], vecs["sparse"])))
+        # ★ 单个子任务检索失败**不能拖垮整轮**：
+        #   把它降级成"这一路没召回"，让下游的 kb_evidence 按"证据不足"处理
+        #   （最终产出的是诚实的"资料不足 + 面诊建议"，仍然要过审查）。
+        #   原来的写法是直接 await gather，任何一路抛错都会让整轮流失败 ——
+        #   实测 Milvus 一次内部重试耗尽能挂 30 分钟，那时用户等到的不是降级回答，
+        #   而是一个永远不会来的响应。
+        results = await asyncio.gather(
+            *(one(q, d, s) for q, d, s in zip(queries, vecs["dense"], vecs["sparse"])),
+            return_exceptions=True)
+
+        groups: list[list[dict]] = []
+        failures: list[str] = []
+        for q, r in zip(queries, results):
+            if isinstance(r, BaseException):
+                failures.append(f"{q.get('sub_task') or q.get('query_text')}: "
+                                f"{type(r).__name__}: {r}")
+                groups.append([])
+            else:
+                groups.append(r)
+
         candidates = [h for g in groups for h in g]
         return {"kb_candidates": candidates,
                 "audit_log": [{"event": "kb_retrieve", "queries": len(queries),
-                               "candidates": len(candidates), "projects": projects}]}
+                               "candidates": len(candidates), "projects": projects,
+                               "failed_sub_tasks": failures}]}
 
     # ══════════════ 6 证据筛选与充分性检查 ══════════════
     async def kb_evidence(state: dict) -> dict:

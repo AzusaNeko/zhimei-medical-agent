@@ -205,6 +205,18 @@ async def main() -> int:
         ("如果失明了怎么办", False, "假设"),
         ("有点疼", False, "泛词无共现"),
         ("脸发白还特别疼", True, "泛词 + 部位 + 程度"),
+        # ── 以下四条来自真实误报 ──
+        # 实测「做完热玛吉脸会肿吗？」被判成 P1 紧急：发了急诊提示模板 + 开了 P1 工单，
+        # 而用户真正的问题一个字没回答。两个原因：
+        #   ① 泛词表里有「热」，它是项目名「热玛吉」的第一个字 ——
+        #      于是每句提到热玛吉的话都自带一个"症状词"；
+        #   ② 部位+泛词共现规则不区分"正在发生"和"询问可能性"。
+        ("做完热玛吉脸会肿吗？", False, "询问可能性（且「热」不应作为症状词）"),
+        ("脸有点肿正常吗", False, "询问是否正常"),
+        ("热玛吉术后会肿几天", False, "询问时间线"),
+        # 反向守住：既是自述又是提问的，必须照常处理 —— 宁可误报不可漏报
+        ("我做完热玛吉脸肿了要紧吗", True, "自述 + 提问：不能因为放宽而漏报"),
+        ("我脸肿了一直不退", True, "「一直」表示当前状态"),
     ]
     for text, expect, why in cases:
         hits = rules.match_emergency(text)
@@ -261,6 +273,34 @@ async def main() -> int:
     check("覆盖多个角色（说明不是只接了某一个入口）", len(roles) >= 4, str(roles))
     check("成功调用都标记为 ok", all(c["ok"] for c in calls),
           str([c for c in calls if not c["ok"]][:2]))
+
+    # ══════════════ 10 二次复核触发判定 ══════════════
+    section("10. 二次复核触发判定（防止把成本烧在噪声上）")
+    # 为什么专门测：这是一条用实测数据推出来的**反直觉**规则 ——
+    # "置信度低"不一定要升级。没有测试锁住的话，后人看到"低置信度就该复核"
+    # 会觉得天经地义，一改就把 93% 的无效升级放回来。
+    from app.graph.sub_risk import escalation_reason  # noqa: E402
+
+    CLEAN = [{"level": "low", "findings": [], "confidence": 0.9, "abstain": False}] * 3
+
+    def esc(reviews, high=False):
+        return escalation_reason(reviews=reviews, high_risk=high)
+
+    check("三份都 low、无 findings、置信度高 → 不升级", esc(CLEAN) is None)
+    check("三份都干净但置信度低 → 不升级（实测 45 次升级里 42 次是这种）",
+          esc([{**r, "confidence": 0.4} for r in CLEAN]) is None)
+    check("确实有 findings 且置信度低 → 升级",
+          esc([{**CLEAN[0], "confidence": 0.4, "findings": [{"span": "x"}]},
+               CLEAN[1], CLEAN[2]]) == "low_confidence")
+    check("有面板判 medium 且置信度低 → 升级",
+          esc([{**CLEAN[0], "confidence": 0.4, "level": "medium"}, CLEAN[1], CLEAN[2]])
+          == "low_confidence")
+    check("有面板弃权 → 一律升级（弃权是明确的「判不了」，必须保守对待）",
+          esc([{**CLEAN[0], "abstain": True}, CLEAN[1], CLEAN[2]]) == "abstain")
+    check("意见冲突（high 对 low）→ 升级",
+          esc([{**CLEAN[0], "level": "high"}, CLEAN[1], CLEAN[2]]) == "conflict")
+    check("命中高风险标签 → 升级", esc(CLEAN, high=True) == "high_risk_tag")
+    check("一份意见都没拿到 → 升级", esc([]) == "no_reviews")
 
     await deps.shutdown()
 

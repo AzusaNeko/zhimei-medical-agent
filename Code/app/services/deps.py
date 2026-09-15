@@ -69,7 +69,8 @@ class Deps:
             reranker = BgeReranker(settings.bge_reranker_path, device=settings.rerank_device,
                                    concurrency=settings.rerank_concurrency)
             vector_store = MilvusHybridStore(settings.milvus_uri, settings.milvus_collection,
-                                             token=settings.milvus_token)
+                                             token=settings.milvus_token,
+                                             timeout=settings.t_recall)
 
         return cls(settings=settings, llm=llm, rules=rules, security=security,
                    encoder=encoder, reranker=reranker, vector_store=vector_store, pg=pg)

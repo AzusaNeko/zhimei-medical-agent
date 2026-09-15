@@ -21,11 +21,17 @@ DENSE_DIM = 1024          # BGE-M3 dense 维度
 OUTPUT_FIELDS = ["chunk_id", "doc_id", "title", "text", "project", "version", "doc_type"]
 
 
+class RecallTimeout(RuntimeError):
+    """检索超时（我们自己的预算耗尽，不是 Milvus 报的错）。"""
+
+
 class MilvusHybridStore:
-    def __init__(self, uri: str, collection: str, *, token: str = "") -> None:
+    def __init__(self, uri: str, collection: str, *, token: str = "",
+                 timeout: float = 10.0) -> None:
         if MilvusClient is None:
             raise RuntimeError("未安装 pymilvus：pip install pymilvus")
         self.collection = collection
+        self.timeout = float(timeout)
         self.client = MilvusClient(uri=uri, token=token or None)
 
     # ══════════════ 建集合（幂等，可在启动时调用）══════════════
@@ -82,9 +88,43 @@ class MilvusHybridStore:
     async def search(self, *, query_text: str, query_dense: list[float],
                      query_sparse: dict[str, float], projects: list[str] | None = None,
                      top_k: int = 40, doc_type: str | None = None) -> list[dict[str, Any]]:
+        """混合检索，带**自己的超时预算**。
+
+        ★★ 这个超时是拿真实事故换来的，删掉它之前请先读完这段 ★★
+
+        实测某次 Milvus 混合检索返回：
+
+            MilvusException: (code=2200, message=Retry run out of 75 retry times,
+              message=incomplete query result, missing id 3, ...,
+              inconsistent requery result)
+            RPC start: 15:18:30  →  RPC error: 15:48:40
+
+        **pymilvus 内部重试了 75 次，前后跨 30 分钟。** 整个过程里：
+
+          · 用户的那一轮就挂在那里 —— 十来秒的对话变成半小时无响应；
+          · 图里的降级逻辑一次都没跑（`kb_evidence` 判"证据不足" → `kb_limit`），
+            因为那次调用**根本没有返回**；
+          · SSE 心跳还在照常发，所以前端看起来"还在处理"，而不是出错。
+
+        给 LLM 我们都设了超时（T_UNDERSTAND / T_GENERATE / T_REVIEW），
+        却把向量检索这条同样依赖外部服务的路径漏掉了 —— 而它恰恰是唯一
+        会自己闷头重试半小时的那个。
+
+        ★ 一个必须知道的取舍：`run_in_executor` 里的阻塞调用**无法被真正取消**。
+          超时之后那个线程还会把 RPC 跑完，只是结果被丢掉了。也就是说这里买到的是
+          "用户不被它拖住"，不是"资源被释放"。真正的解法是给 pymilvus 配更短的重试
+          策略（或换用带 deadline 的调用），那属于后续优化；但在那之前，
+          这道超时保证了一轮对话不会被一次检索故障拖死。
+        """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, self._search_sync, query_dense, query_sparse, projects, top_k, doc_type)
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, self._search_sync, query_dense, query_sparse, projects, top_k, doc_type),
+                timeout=self.timeout)
+        except asyncio.TimeoutError as exc:
+            raise RecallTimeout(
+                f"检索超时（{self.timeout:.0f}s）—— Milvus 可能正在重试或不可用") from exc
 
     def _search_sync(self, q_dense: list[float], q_sparse: dict[str, float],
                      projects: list[str] | None, top_k: int, doc_type: str | None) -> list[dict]:

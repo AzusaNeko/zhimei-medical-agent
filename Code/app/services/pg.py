@@ -125,17 +125,18 @@ class PgStore:
                           review_kind: str, verdict: str, risk_level: str, content_hash: str,
                           panel_reviews: list[dict], escalation_used: bool,
                           escalation_independent: bool, token_id: str | None = None,
-                          model_versions: dict | None = None) -> int:
+                          model_versions: dict | None = None,
+                          escalation_reason: str | None = None) -> int:
         row = await self._fetchrow(
             """INSERT INTO app.review_audit
                (thread_id, session_id, review_round, review_kind, verdict, risk_level,
                 content_hash, panel_reviews, escalation_used, escalation_independent,
-                token_id, model_versions)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING audit_id""",
+                token_id, model_versions, escalation_reason)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING audit_id""",
             thread_id, _uuid(session_id), review_round, review_kind, verdict, risk_level,
             content_hash, json.dumps(panel_reviews, ensure_ascii=False),
             escalation_used, escalation_independent, token_id,
-            json.dumps(model_versions or {}, ensure_ascii=False))
+            json.dumps(model_versions or {}, ensure_ascii=False), escalation_reason)
         return int(row["audit_id"])
 
     async def write_hard_rule_hits(self, hits: list[dict], *, audit_id: int | None = None) -> None:
@@ -149,7 +150,19 @@ class PgStore:
                  for h in hits])
 
     async def note_same_family_review(self, thread_id: str) -> None:
-        """MVP 阶段复核与首次审查同族 —— 如实记一笔，不假装独立。"""
+        """MVP 阶段复核与首次审查同族 —— 如实记一笔，不假装独立。
+
+        ★ 注意这一行的形状，它很容易误导读数的人（我自己就被绕进去过）：
+          `review_kind='note'`、`review_round=0`、`panel_reviews='[]'`，
+          但 `escalation_used=true` —— 因为这条备注的含义是
+          "本轮确实做了复核，而且复核与首审同族"，不是在描述某一轮的审查结论。
+
+          后果：任何**没有排除 note** 的统计都会被它污染。
+          比如"升级率"用 `count(*) FILTER (WHERE escalation_used)` 直接算，
+          会把 27 条备注行全算成升级，把真实升级率从 25% 虚高到 43%。
+          `metrics()` 里的查询已经带了 `WHERE review_kind <> 'note'`，
+          自己写临时 SQL 时也要记得加。
+        """
         await self._execute(
             """INSERT INTO app.review_audit
                (thread_id, session_id, review_round, review_kind, verdict, risk_level,
