@@ -11,7 +11,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 75 项断言全过） |
+| 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 87 项断言全过） |
 | 四个典型场景端到端演示 | ✅ 已验证（科普含修订环 / 预约含确认执行 / 紧急 / 澄清） |
 | **FastAPI + SSE 接口层** | ✅ **已实现并验证**（`scripts/smoke_api.py` 39 项 + `smoke_api_live.py` 57 项真实 HTTP） |
 | **运营后台（坐席工作台）** | ✅ **已实现并验证**（`scripts/smoke_ops.py` 48 项；面板 + 队列 + 跨模块联动） |
@@ -47,7 +47,7 @@ python scripts/check_env.py
 ```bash
 cd Code
 pip install -r requirements.txt        # 或者 uv pip install -r requirements.txt
-python scripts/smoke.py                # 75 项不变量断言
+python scripts/smoke.py                # 87 项不变量断言
 python -m app.cli --demo --profile fake
 ```
 
@@ -112,8 +112,8 @@ python -m app.cli --interactive --user <user_id>
 > 📋 **接真实依赖时请照着 [`SELF-TEST.md`](SELF-TEST.md) 逐项走。**
 > 那份清单写明了每一步的期望结果、出错先看哪里，以及**只有真实模型才能验的质量项**
 > （引用是否可溯源、三位专家意见是否真的视角不同、审查超时是否降级为转人工、
-> 模型会不会把"会不会失明"误判成紧急等）。接线已经用 fake 档位验过 112 项断言
-> （`smoke.py` 75 + `smoke_api.py` 37），清单验的是行为与质量。
+> 模型会不会把"会不会失明"误判成紧急等）。接线已经用 fake 档位验过 126 项断言
+> （`smoke.py` 87 + `smoke_api.py` 39），清单验的是行为与质量。
 
 > ⚠️ 真实档位跑 CLI 时**记得带 `--user <uuid>`**（uuid 在 `seed_kb.py` 的输出里）。
 > 不绑用户 → 会话 `auth.verified=false` → 所有预约类请求会被判 `need_info`。
@@ -229,7 +229,7 @@ python scripts/check_schema.py                                # 新建库 + 升�
 ```bash
 python -m app.api --port 8090            # real 档位；加 --profile fake 则不需要任何外部依赖
 # 浏览器打开 http://127.0.0.1:8090/chat
-node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点表同步 / DOM id / 测试工单隔离 / 页面启动，37 项）
+node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点表同步 / DOM id / 测试工单隔离 / 页面启动，40 项）
 ```
 
 同样是**单文件 HTML + 原生 JS**（`app/web/chat.html`，无构建步骤、无 CDN），由 FastAPI 托管。
@@ -440,6 +440,26 @@ python scripts/smoke_ops.py        # 48 项（不变量、跨模块联动、权�
 槽位本身会随 checkpointer 跨轮次保留，所以"项目 / 门店 / 术后天数"这类正好有槽位的信息
 比自由文本更耐久。
 
+**越界不等于没得答。** 有一类问题既不是知识库该答的（"我做的什么项目？"），
+答案又明明在手上（槽位里就写着 `project=超声炮`）。
+知识库子图原来判定"越界"之后就跳到收口节点，吐一句固定话术
+"这个问题建议由顾问或医生为您解答，我这边先不做判断。" ——
+顾客的原话是"没有获取到历史记忆"，而**信息其实取到了，是这条出口拒绝用它**。
+
+现在越界路径上多了一步 `kb_ctx_reply`：先用**手上已有的槽位与对话历史**试答一次，
+答不了就退回原来的转交行为。它有一条硬约束，锁在冒烟里（`ctx_reply_patch` 纯函数）：
+
+> **空内容 = 什么都不做。** 宁可输出空（转交人工），也不要硬答（给用户错误信息）。
+> 所以"答不了"的情况**行为完全不变**，只是多试了一次。
+
+判定权交给模型、默认值取安全的那个 —— 和项目里其它判定类节点一个取向。
+
+**怎么测这些跨轮行为**：`scripts/multi_turn_cases.py`（见 `SELF-TEST.md` 6d 节）。
+挑案例的原则是**专挑没有退路的那条路径**：
+
+> 测"记忆"要用**装不进槽位的事实**（过敏史、既往史）。
+> 用"我做的是水光"是测不出来的 —— `project` 槽位会替历史兜住，看起来一切正常。
+
 ---
 
 ## 目录结构
@@ -462,10 +482,11 @@ Code/
 │  │  └─ build.py              # ★ 主图装配
 │  └─ services/                # 模型网关 / 规则引擎 / 检索 / 存储 / 凭据 / 依赖容器
 ├─ scripts/
-│  ├─ smoke.py                 # 无需 pytest 的冒烟验证（75 项）
+│  ├─ smoke.py                 # 无需 pytest 的冒烟验证（87 项）
 │  ├─ check_store_parity.py    # PgStore 与 FakePg 的接口必须逐字一致
 │  ├─ check_schema.py          # 新建库 + 升级旧库两条路径都要能跑通（34 项）
-│  ├─ check_ui.cjs             # 前端静态校验：语法 / 节点表同步 / 测试工单隔离 / 页面真实启动（37 项）
+│  ├─ multi_turn_cases.py      # 多轮对话案例集（跨轮才会暴露的行为，见 SELF-TEST 6d）
+│  ├─ check_ui.cjs             # 前端静态校验：语法 / 节点表同步 / 测试工单隔离 / 页面真实启动（40 项）
 │  └─ seed_kb.py               # 演示数据播种
 ├─ sql/schema.sql              # app / ops schema 表结构 + 增量变更（加列必读文末第 10 节）
 ├─ docker-compose.yml          # Postgres + Milvus（etcd + minio）

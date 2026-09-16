@@ -256,6 +256,62 @@ async def main() -> int:
     check("核对没返回任何 claims → 按硬问题处理（空 claims 不能当成通过）",
           decide([], 1) == "ungrounded" and decide([], 3) == "loop_out")
 
+    # ══════════════ 8b 越界时"先用上下文试答一次"的安全默认 ══════════════
+    section("8b. 越界问题的上下文试答（答不了必须退回原行为）")
+    # 为什么专门测这段：`kb_intake` 判定"这不是知识库该答的问题"之后，原来直接
+    # 跳到收口节点吐一句固定话术。实测顾客先说过"我做的是超声炮"（槽位里就写着），
+    # 再问"我做的什么项目？"，答案明明在手边却回了"我这边先不做判断" ——
+    # 用户的原话是"没有获取到历史记忆"，其实是**这条出口拒绝用已有信息**。
+    #
+    # 新增的这一步有风险（多了一次模型调用、多了一个可能乱答的地方），
+    # 所以把最关键的那条不变量锁死：**空内容 = 什么都不做**。
+    from app.graph.sub_knowledge import ctx_reply_patch  # noqa: E402
+
+    empty = ctx_reply_patch("", "这是操作请求")
+    check("答不了（空内容）→ 不写草稿，交回原路径转交",
+          "kb_draft_content" not in empty, str(empty))
+    check("答不了（纯空白）→ 同上（空白不能当成有内容）",
+          "kb_draft_content" not in ctx_reply_patch("   \n  ", "拿不准"))
+    check("答不了时不吞掉原因（审计要看得见为什么没答）",
+          empty["audit_log"][0]["event"] == "kb_ctx_reply_declined"
+          and "操作请求" in empty["audit_log"][0]["reason"], str(empty))
+    answered = ctx_reply_patch("  您之前提到做的是超声炮。  ", "槽位里有")
+    check("答得了 → 写草稿内容并去掉首尾空白",
+          answered.get("kb_draft_content") == "您之前提到做的是超声炮。", str(answered))
+    check("答得了 → citations / gaps 留空（这一层没有证据可引）",
+          answered.get("kb_citations") == [] and answered.get("kb_gaps") == [],
+          str(answered))
+
+    # ══════════════ 8c 硬性规则的否定语境（"不要涂抹"不是用药建议）══════════════
+    section("8c. 硬性规则的否定处理（否则最安全的提醒会被拦掉）")
+    # 为什么专门测这段：硬性规则是**字面匹配**，而"禁止做某事"用的是同一个词。
+    # 实测踩到（`scripts/multi_turn_cases.py M5`）：顾客术后发烧、眼睛看不清，
+    # 正确的话恰恰是"**不要**自行涂抹任何外用产品" —— 被判成 MED-002「给出用药建议」，
+    # 改三轮后升级为 block，于是这条最该发出去的提醒变成"内容被硬性阻断"，
+    # 顾客什么都没收到，工单也没有。
+    # 与紧急词表当初的坑同类（"热玛吉"里的"热"），结论一样：字面匹配必须处理否定。
+    def hits(text: str) -> list[str]:
+        return [h.rule_id for h in rules.check_text(text)]
+
+    check("「不要自行涂抹…」不再被判成用药建议",
+          "MED-002" not in hits("不要自行涂抹任何外用产品"), str(hits("不要自行涂抹任何外用产品")))
+    check("祈使式否定（请勿 / 禁止 / 避免）同样放过",
+          all("MED-002" not in hits(t) for t in
+              ("请勿涂抹药膏", "禁止使用软膏", "避免涂抹刺激性产品")),
+          str([hits(t) for t in ("请勿涂抹药膏", "禁止使用软膏", "避免涂抹刺激性产品")]))
+    check("真的在给用药建议 → 照旧拦住（放宽不等于放行）",
+          "MED-002" in hits("可以涂抹一点消炎药") and "MED-002" in hits("建议吃点药观察一下"),
+          str(hits("可以涂抹一点消炎药")))
+    check("否定管不到后半句：「不要吃辣，可以涂抹保湿霜」仍要拦",
+          "MED-002" in hits("不要吃辣，可以涂抹保湿霜"),
+          str(hits("不要吃辣，可以涂抹保湿霜")))
+    check("否定被后面的肯定指令推翻：「无需担心，请涂抹药膏」仍要拦",
+          "MED-002" in hits("无需担心，请涂抹药膏"), str(hits("无需担心，请涂抹药膏")))
+    check("单字否定词不误伤：「特别疼的时候涂抹药膏」仍要拦",
+          "MED-002" in hits("特别疼的时候涂抹药膏"), str(hits("特别疼的时候涂抹药膏")))
+    check("其它硬性规则不受影响（诊断结论照旧拦）",
+          "MED-001" in hits("你这是典型的过敏"), str(hits("你这是典型的过敏")))
+
     # ══════════════ 9 模型调用日志 ══════════════
     section("9. 模型调用日志（成本与延迟的唯一数据来源）")
     # 为什么在 fake 档位测这个：日志链路（网关 → sink → 存储）跟模型真假无关，

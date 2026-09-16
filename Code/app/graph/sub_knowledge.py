@@ -20,7 +20,8 @@ from typing import Callable
 
 from langgraph.graph import END, START, StateGraph
 
-from ..graph.schemas import KbDecomposeOut, KbDraftOut, KbVerifyOut, EvidenceOpinion
+from ..graph.schemas import (EvidenceOpinion, KbCtxOut, KbDecomposeOut, KbDraftOut,
+                             KbVerifyOut)
 from ..prompts import kb as P
 from ..prompts.system import (HISTORY_RULES, render_dialog_history, render_evidence,
                               render_feedback, render_slots)
@@ -114,6 +115,36 @@ def build_knowledge_subgraph(deps: Deps):
 
     def after_sufficiency(state: dict) -> str:
         return "ok" if state.get("kb_sufficient", True) else "need_info"
+
+    # ══════════════ 3b 越界收口前：先用会话上下文答一次 ══════════════
+    async def kb_ctx_reply(state: dict) -> dict:
+        """越界（不是知识库该答的问题）时，先看看**手上已有的上下文**能不能答。
+
+        ★ 这条路径原来是直接跳到收口节点，吐一句固定话术
+          "这个问题建议由顾问或医生为您解答，我这边先不做判断。"
+          实测：顾客先说过"我做的是超声炮"（槽位里就写着），再问"我做的什么项目？"，
+          答案明明在手边，却回了"我这边先不做判断"。
+          用户的原话是"没有获取到历史记忆" —— 信息其实取到了，是这条出口拒绝用它。
+
+        ★ 安全默认：模型输出空 content 就什么都不做，后面的收口节点照旧转交。
+          所以**答不了的情况行为完全不变**，只是多了一次尝试。
+          这一点很重要：宁可输出空（转交），也不要硬答（给错信息）。
+        """
+        try:
+            out: KbCtxOut = await deps.llm.structured(
+                "kb_ctx_reply", KbCtxOut, system=P.KB_CTX_SYSTEM,
+                user=P.KB_CTX_USER.format(
+                    user_input=state.get("user_input", ""),
+                    slots=render_slots(state.get("slots")),
+                    history=render_dialog_history(state.get("recent_turns") or [])))
+        except Exception as exc:  # noqa: BLE001
+            # 出错了就当"答不了"，继续走原来的转交路径 —— 不让新增的这一步
+            # 把一条本来能正常收口的路径变成失败。
+            return {"audit_log": [{"event": "kb_ctx_reply_degraded",
+                                   "error": str(exc)[:120]}]}
+
+        content = (out.content or "").strip()
+        return ctx_reply_patch(content, out.reason)
 
     # ══════════════ 4 生成澄清问题（出口之一）══════════════
     async def kb_clarify(state: dict) -> dict:
@@ -329,6 +360,7 @@ def build_knowledge_subgraph(deps: Deps):
     b.add_node("kb_context", kb_context)
     b.add_node("kb_decompose", kb_decompose)
     b.add_node("kb_clarify", kb_clarify)
+    b.add_node("kb_ctx_reply", kb_ctx_reply)
     b.add_node("kb_retrieve", kb_retrieve)
     b.add_node("kb_evidence", kb_evidence)
     b.add_node("kb_limit", kb_limit)
@@ -340,7 +372,9 @@ def build_knowledge_subgraph(deps: Deps):
                             {"fresh": "kb_intake", "revision": "kb_revise_in"})
     b.add_edge("kb_revise_in", "kb_draft")     # 修订必须重新生成，不能只重新核对
     b.add_conditional_edges("kb_intake", after_scope,
-                            {"in_scope": "kb_context", "out": "kb_return"})
+                            {"in_scope": "kb_context", "out": "kb_ctx_reply"})
+    # 越界不等于没得答：先用手上的上下文试一次，答不了再照旧收口转交。
+    b.add_edge("kb_ctx_reply", "kb_return")
     b.add_edge("kb_context", "kb_decompose")
     b.add_conditional_edges("kb_decompose", after_sufficiency,
                             {"ok": "kb_retrieve", "need_info": "kb_clarify"})
@@ -375,6 +409,22 @@ SOFT_REPAIR_ROUNDS = 1
 
 def _is_soft(claim: dict) -> bool:
     return str(claim.get("status") or "").strip().lower() in SOFT_STATUS
+
+
+def ctx_reply_patch(content: str | None, reason: str = "") -> dict:
+    """把"越界时先试答一次"的模型输出，规范化成状态补丁（纯函数，便于单测）。
+
+    ★ 这里唯一要守住的事：**空内容 = 什么都不做**，让后续的收口节点照旧转交人工。
+      也就是说这条新增的路径**答不了时行为完全不变** —— 只是多试一次。
+      宁可输出空（转交），也不要硬答（给用户错误信息）。
+      `reason` 只进审计日志，不参与出站内容。
+    """
+    text = (content or "").strip()
+    if not text:
+        return {"audit_log": [{"event": "kb_ctx_reply_declined",
+                               "reason": (reason or "")[:120]}]}
+    return {"kb_draft_content": text, "kb_citations": [], "kb_gaps": [],
+            "audit_log": [{"event": "kb_ctx_reply", "answered": True}]}
 
 
 def decide_verify_exit(*, claims: list[dict], round_no: int,

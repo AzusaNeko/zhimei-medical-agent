@@ -104,6 +104,16 @@ class KbDraftOut(BaseModel):
     used_evidence_ids: list[str] = Field(default_factory=list)
 
 
+class KbCtxOut(BaseModel):
+    """越界问题的"先用上下文答一次"输出。
+
+    ★ content 允许为空，而且**空是常态**：空 = 交给人工（安全默认），
+      有内容 = 只用会话里已有的事实回答。判定权交给模型，但默认值是安全的。
+    """
+    content: str = ""
+    reason: str = ""
+
+
 class ClaimCheck(BaseModel):
     sentence: str = ""
     cited: str | None = None
@@ -155,6 +165,29 @@ class SpecialistDraftOut(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
     operation: dict[str, Any] | None = None
+
+    @field_validator("citations", mode="before")
+    @classmethod
+    def _coerce_bare_ids(cls, v: Any) -> Any:
+        """把 `["E1"]` 这种裸字符串收成 `[{"evidence_id": "E1"}]`。
+
+        ★ 为什么会发生：Prompt 里给对话历史之后，模型会看到**上一轮回答**里的
+          `[E1]` 标记，于是它"顺手"把 E1 填进了本轮的 citations。
+          实测（`scripts/multi_turn_cases.py M1`）正是这样：
+          `citations.0  Input should be an object  input_value='E1'`
+          —— 连试两次都不合格 → `LLMError` → 兜底转人工。
+          顾客问了一句"那个更适合我？"，收到的是"已为您转接人工客服"，
+          而**原因只是一个引用编号的写法**。
+
+        ★ 为什么在这里容忍、而在 `KbDraftOut` 里不容忍：
+          专业 Agent 的 citations **不是溯源凭据**（它们本来就没有知识库证据，
+          模板里一直是空数组），为一个格式小事把整轮变成转人工不成比例。
+          而知识库草稿的 citations **就是**"引用必须可溯源"的凭据本身，
+          少一个 doc_id 就不能定位到原文 —— 那里必须严格，宁可回炉重写。
+        """
+        if isinstance(v, list):
+            return [{"evidence_id": s} if isinstance(s, str) else s for s in v]
+        return v
 
 
 class ReceiptOut(BaseModel):

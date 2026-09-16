@@ -202,6 +202,32 @@ check('图执行异常会写服务端日志（logger.exception）',
       /logger\.exception\(/.test(apiRoutes),
       'routes.py 里没有 logger.exception —— 服务端异常在日志里将查无此事');
 
+// E9 ★ 引用编号的"宽/严"是有意为之的一对，别把它抹平。
+//    给回答类 Prompt 注入对话历史之后，模型会看到**上一轮回答**里的 [E1] 标记，
+//    于是顺手把它填进本轮的 citations —— 实测就是这么炸的：
+//      specialist_draft 结构化输出两次均不合格：citations.0 Input should be an object
+//      input_value='E1'
+//    → LLMError → 兜底转人工。顾客只问了一句"那个更适合我？"，
+//    收到的却是"已为您转接人工客服"，原因只是一个引用编号的写法。
+//    所以：专业 Agent 宽容（那里的 citations 不是溯源凭据），
+//    知识库草稿严格（那里的 citations **就是**可溯源的凭据本身）。
+const schemas = read('app/graph/schemas.py');
+const specBlock = schemas.slice(schemas.indexOf('class SpecialistDraftOut'),
+                                schemas.indexOf('class ReceiptOut'));
+const kbBlock = schemas.slice(schemas.indexOf('class KbDraftOut'),
+                              schemas.indexOf('class ClaimCheck'));
+check('专业 Agent 的 citations 容忍裸字符串（历史里的 [E1] 不该炸掉整轮）',
+      /_coerce_bare_ids/.test(specBlock),
+      'SpecialistDraftOut 没有裸字符串收敛 —— 上一轮的 [E1] 会让整轮变成转人工');
+check('知识库草稿的 citations 仍然严格（那是"可溯源"的凭据本身）',
+      !/_coerce_bare_ids|field_validator\("citations"/.test(kbBlock),
+      'KbDraftOut 也放宽了 —— 引用可能缺少 quote/doc_id，无法定位到原文');
+
+// E10 对话历史块必须提醒模型别抄历史里的引用编号
+check('注入历史时明确说明历史里的 [E1] 不属于本轮',
+      /\[E1\]/.test(read('app/prompts/system.py')),
+      'HISTORY_RULES 没提这件事 —— 模型会继续把上一轮的引用编号抄进本轮');
+
 // ── F. 两个页面在"已登录 + 刷新"下必须真的能启动 ──
 //
 // ★ 这一节是踩出来的，不是预防性设计。`bootData()` 里写了一个

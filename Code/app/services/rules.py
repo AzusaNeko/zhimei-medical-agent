@@ -194,6 +194,44 @@ class RuleEngine:
         return None
 
     # ══════════════ 硬性阻断规则 ══════════════
+    #: 硬性规则专用的否定词表（与紧急词表那份**分开**）。
+    #:
+    #: ★ 为什么不直接往共享的 `negation_markers` 里加词：那份表同时喂给
+    #:   **紧急信号**判定，动它会改变分诊行为 —— 一个为了修文案误报的改动，
+    #:   不该顺手改掉分诊。所以这里做超集，把影响圈在硬性规则内。
+    #:
+    #: ★ 为什么收的是**词组**而不是单字：单字 `别`、`勿` 会和别的词撞
+    #:   （"特别疼"里就有个"别"），一旦误判成否定，硬性规则就会被**漏掉** ——
+    #:   而漏掉的方向是危险的（该拦的没拦）。宁可少认几个否定说法。
+    _NEGATIONS = ("不要", "不得", "不能", "不可", "不应", "不用",
+                  "请勿", "切勿", "禁止", "严禁", "避免", "无需", "无须",
+                  "没有", "没", "不", "无")
+
+    #: 这些词出现在"否定词 → 命中词"之间，说明否定**已经失效**
+    #: （"无需担心，**请**涂抹药膏" —— 后半句就是实打实的用药建议）。
+    _POSITIVE_MARKERS = ("请", "建议", "可以", "可", "应", "必须", "需")
+
+    #: 否定词与命中词之间允许的最大间隔（字）。
+    #: 取 6 是因为 "不要**自行**涂抹" 这种中间夹一个副词的写法很常见，
+    #: 而再放宽就会跨进另一个分句，把不相关的否定算进来。
+    _NEGATION_WINDOW = 6
+
+    def _negated(self, content: str, idx: int) -> bool:
+        """命中位置 idx 处的词，是不是处在否定语境里（"不要…涂抹"）。"""
+        window = content[max(0, idx - self._NEGATION_WINDOW):idx]
+        # 取**最长**的否定词（"不要" 优先于 "不"），避免把"不要自行"拆成"不"
+        hit = None
+        for tok in sorted(self._NEGATIONS, key=len, reverse=True):
+            pos = window.rfind(tok)
+            if pos >= 0:
+                hit = (tok, pos + len(tok))
+                break
+        if hit is None:
+            return False
+        gap = window[hit[1]:]
+        # 否定之后又出现了肯定指令 → 否定失效
+        return not any(m in gap for m in self._POSITIVE_MARKERS)
+
     def check_text(self, content: str, *, prior_hits: list[dict] | None = None) -> list[RuleHit]:
         """
         只检查 literal / regex 类规则（ops / semantic 类由代码在别处判定）。
@@ -211,14 +249,26 @@ class RuleEngine:
             span = ""
             if check == "literal":
                 for p in rule.get("patterns", []):
-                    if p and p in content:
-                        span = p
+                    if not p:
+                        continue
+                    # 逐个出现位置看：只要有一处**不是**否定用法，就算命中。
+                    # （"不要涂抹"放过，"可以涂抹"照旧拦住。）
+                    start = content.find(p)
+                    while start >= 0:
+                        if not self._negated(content, start):
+                            span = p
+                            break
+                        start = content.find(p, start + len(p))
+                    if span:
                         break
             else:
                 for pat in self._compiled.get(rule["id"], []):
-                    m = pat.search(content)
-                    if m:
-                        span = m.group()[:40]
+                    # regex 类同样跳过否定用法，理由见 _NEGATION_WINDOW
+                    for m in pat.finditer(content):
+                        if not self._negated(content, m.start()):
+                            span = m.group()[:40]
+                            break
+                    if span:
                         break
             if not span:
                 continue

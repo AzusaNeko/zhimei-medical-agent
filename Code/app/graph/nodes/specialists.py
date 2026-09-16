@@ -42,7 +42,10 @@ SPECIALIST_USER = """用户问题：{user_input}
 {{"content": "面向用户的内容草稿",
   "citations": [],
   "gaps": [],
-  "operation": null}}"""
+  "operation": null}}
+
+说明：citations 平时**留空数组**。你这一层拿不到知识库证据（那是科普 Agent 的事），
+所以不要填写引用编号 —— 输出 `[]` 就好。"""
 
 
 def _draft(state: dict, agent: str, content: str, *, citations: list | None = None,

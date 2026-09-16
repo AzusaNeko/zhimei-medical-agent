@@ -340,6 +340,7 @@ const NODES = {
   kb_context:   {n:"上下文装配",       g:"kb", llm:0, d:"拼装已知槽位与历史"},
   kb_decompose: {n:"检索子任务拆分",   g:"kb", llm:1, d:"把口语问题拆成 2–5 个检索式"},
   kb_clarify:   {n:"追问（缺信息）",   g:"kb", llm:1, d:"关键信息不足，先问清楚再答"},
+  kb_ctx_reply: {n:"越界前先看上下文", g:"kb", llm:1, d:"不是知识库该答的问题时，先用手上已有的信息试答一次"},
   kb_retrieve:  {n:"混合检索",         g:"kb", llm:0, d:"BGE-M3 dense+sparse → Milvus → RRF 融合"},
   kb_evidence:  {n:"证据筛选与充分性", g:"kb", llm:1, d:"精排 + 阈值过滤；高影响问题做二次判断"},
   kb_limit:     {n:"缩小回答范围",     g:"kb", llm:1, d:"证据不足时坦白说不知道，不编"},
