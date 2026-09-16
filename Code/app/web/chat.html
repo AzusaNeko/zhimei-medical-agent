@@ -49,11 +49,18 @@ code,.mono{font-family:Consolas,"SF Mono",Menlo,monospace}
                  border-color:#8fbfb3;color:var(--accent);white-space:nowrap}
 .conv-list{flex:1;overflow-y:auto;padding:6px 0}
 .conv{padding:9px 16px;border-bottom:1px solid #eef2f5;cursor:pointer;
-      border-left:3px solid transparent}
+      border-left:3px solid transparent;position:relative}
 .conv:hover{background:#f4f9f8}
 .conv.active{background:#eaf4f2;border-left-color:var(--accent)}
+/* 删除按钮：默认半透明，鼠标移到这一行才明显 —— 免得列表看着像一排叉 */
+.cv-del{position:absolute;top:7px;right:10px;width:20px;height:20px;padding:0;
+        border:1px solid transparent;border-radius:5px;background:transparent;
+        color:var(--muted);font-size:12px;line-height:1;cursor:pointer;opacity:0;
+        transition:opacity .12s}
+.conv:hover .cv-del{opacity:.65}
+.cv-del:hover{opacity:1;background:#ffe3de;color:#8a2a1e;border-color:#f0c9c2}
 .cv-title{font-size:13px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;
-          white-space:nowrap}
+          white-space:nowrap;padding-right:26px}   /* 让开右侧的删除按钮 */
 .conv.unread .cv-title{color:var(--muted)}
 .cv-meta{font:11px Consolas,monospace;color:var(--muted);margin-top:3px;
          display:flex;gap:8px;align-items:center}
@@ -125,19 +132,18 @@ button:disabled{opacity:.45;cursor:not-allowed}
 /* ── 轨迹区 ── */
 .trace{height:calc(100vh - 132px);min-height:560px;display:flex;flex-direction:column}
 
-/* 右栏两个视图：轨迹列表 / 工作流图 */
-.tabs{display:flex;gap:0;border-bottom:1px solid var(--line);background:#fcfdfe}
-.tab{flex:1;padding:9px 10px;border:0;background:transparent;font:inherit;font-size:13px;
-     color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
-.tab:hover{color:var(--ink)}
-.tab.active{color:var(--accent);border-bottom-color:var(--accent);
-            background:#fff;font-weight:600}
-#paneTrace{display:flex;flex-direction:column;flex:1;min-height:0}
-#paneGraph{display:flex;flex-direction:column;flex:1;min-height:0}
-.gbar{display:flex;gap:6px;padding:8px 14px;border-bottom:1px solid #eef2f5;background:#fcfdfe}
-.gbar button{padding:4px 9px;font-size:12px;border:1px solid var(--line);border-radius:6px;
-             background:#fff;color:var(--ink);cursor:pointer}
-.gbar button:hover{border-color:var(--accent);color:var(--accent)}
+/* 右栏两个**独立窗口**：架构在上（固定高度）、轨迹在下（吃掉剩余空间）。
+   各自有自己的标题栏和滚动条 —— 滚架构不会把轨迹滚跑，反之亦然。 */
+.pane{display:flex;flex-direction:column;min-height:0}
+#paneGraph{flex:0 0 auto;height:46%;border-bottom:2px solid var(--line)}
+#paneTrace{flex:1 1 auto}
+.pane-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+           padding:6px 14px;background:#f7fafc;border-bottom:1px solid #eef2f5;
+           font-size:12px;color:var(--muted);font-weight:600}
+.pane-tools{display:flex;gap:4px}
+.pane-tools button{padding:2px 7px;font-size:11px;border:1px solid var(--line);
+                   border-radius:5px;background:#fff;color:var(--muted);cursor:pointer}
+.pane-tools button:hover{border-color:var(--accent);color:var(--accent)}
 .glegend{display:flex;flex-wrap:wrap;gap:6px 12px;padding:7px 14px;font-size:11.5px;
          color:var(--muted);border-bottom:1px solid #eef2f5}
 .glegend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;
@@ -334,55 +340,55 @@ button:disabled{opacity:.45;cursor:not-allowed}
     </div>
   </section>
 
-  <!-- ══════ 右：执行轨迹 / 工作流图 ══════ -->
+  <!-- ══════ 右：执行轨迹 + 工作流架构（同屏，各自独立滚动）══════ -->
   <aside class="card trace">
     <h2>Agent 执行轨迹 <span class="sub" id="traceMeta">等待提问</span></h2>
-    <div class="tabs">
-      <button class="tab active" id="tabTrace">执行轨迹</button>
-      <button class="tab" id="tabGraph">工作流架构</button>
+
+    <!--
+      ★ 两个视图**同屏展示**，取消原来的一栏切换。
+        理由：它们回答的是两个不同的问题，而且看的时候往往是**同时**看 ——
+        "这一步怎么走的"（轨迹）和"整条路走到哪了"（架构）。
+        做成切换的话，每次对照都要点一下、还得记住刚才那一屏，
+        等于把一份信息拆成两半让人自己拼。
+      ★ 但**分成两个独立窗口**：各自有自己的标题栏与滚动条，
+        互不干扰（滚架构不会把轨迹滚跑）。
+      ★ 架构窗口给固定高度、轨迹吃掉剩下的：轨迹条数不定、需要更多空间，
+        而架构是固定的一张图，高度够看就行。
+    -->
+    <div class="pane" id="paneGraph">
+      <div class="pane-head">
+        <span>工作流架构 <span class="sub" id="gSummaryInline">等待提问</span></span>
+        <span class="pane-tools">
+          <button id="gFit" title="缩放到适应宽度">适应</button>
+          <button id="gZoomIn">＋</button>
+          <button id="gZoomOut">－</button>
+          <button id="gClear" title="清空本次高亮">清空</button>
+        </span>
+      </div>
+      <!-- "本次对话经过了哪些层 / 哪些子图" -->
+      <div class="gsummary" id="gSummary"></div>
+      <div class="gwrap" id="gWrap">
+        <svg id="gSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
     </div>
 
-    <div id="paneTrace">
-    <div class="legend">
-      <span><i style="background:var(--g-main)"></i>主图</span>
-      <span><i style="background:var(--g-kb)"></i>科普子图</span>
-      <span><i style="background:var(--g-risk)"></i>风险审查子图</span>
-      <span><i style="background:#fff4dd;border:1px solid #e6d3a8"></i>会调用大模型（烧 token）</span>
-      <span style="color:#8a5a1e">点任意节点可展开它的输出</span>
+    <div class="pane" id="paneTrace">
+      <div class="pane-head"><span>执行轨迹</span></div>
+      <div class="legend">
+        <span><i style="background:var(--g-main)"></i>主图</span>
+        <span><i style="background:var(--g-kb)"></i>科普子图</span>
+        <span><i style="background:var(--g-risk)"></i>风险审查子图</span>
+        <span><i style="background:#fff4dd;border:1px solid #e6d3a8"></i>会调用大模型（烧 token）</span>
+      </div>
     </div>
     <ol class="nodes" id="nodes"></ol>
     <div class="trace-foot" id="traceFoot" style="display:none"></div>
     <div class="hint" id="traceHint">
       提问后，这里会按顺序实时列出图里真正执行过的节点（含子图内部节点）。
-      耗时是相邻两次事件之间的间隔。<br>
+      耗时是相邻两次事件之间的间隔。<b style="color:#8a5a1e">点任意节点可展开它的输出。</b><br>
       <b style="color:#8a5a1e">★ 这是调试视图</b>：展开后能看到节点写回的原始状态，
       其中可能包含<b>未经审查的中间产物</b>（草稿、审查意见、检索到的原文）。
       顾客只应看到对话区里那份「已审正文」。<b>面向真实顾客时必须关掉这个勾选框。</b>
-    </div>
-    </div><!-- /paneTrace -->
-
-    <!-- ══════ 工作流架构：按 langgraph-main.mmd 的分层绘制 ══════ -->
-    <div id="paneGraph" hidden>
-      <div class="gbar">
-        <button id="gFit">适应宽度</button>
-        <button id="gZoomIn">放大</button>
-        <button id="gZoomOut">缩小</button>
-        <button id="gClear">清空高亮</button>
-      </div>
-      <!-- "本次对话经过了哪些层 / 哪些子图" —— 单独一块，切到哪栏都看得到 -->
-      <div class="gsummary" id="gSummary"></div>
-      <div class="gwrap" id="gWrap">
-        <svg id="gSvg" xmlns="http://www.w3.org/2000/svg"></svg>
-      </div>
-      <div class="hint" id="gHint">
-        这是按 <b>Workflow/langgraph-main.mmd</b> 那张设计图画的分层架构：
-        入口与调度 → 七路草稿 → 必经关卡 → 修订回路 → 输出与执行 → 出口层。
-        菱形是路由点，黄色小点表示这一步会调用大模型。<br>
-        提问后走过的节点会依次点亮、走过的连线会流动 ——
-        <b>上方摘要</b>直接告诉你这一次进了哪几个子图。<br>
-        <b style="color:#8a5a1e">架构与代码的一致性由后端交叉校验</b>：
-        万一有人加了节点却没更新设计图，这里会直接标出来。
-      </div>
     </div>
   </aside>
 </div>
@@ -657,6 +663,7 @@ async function afterLogin() {
   }
   $("input").focus();
   startWatch();   // 坐席的回复靠它主动出现（见 startWatch 的说明）
+  graphEnsure();  // 架构窗口是同屏常驻的，登录后就把图画出来（不再等点击）
 }
 
 function logout() {
@@ -717,8 +724,59 @@ function renderConversations() {
     if (c.msg_count) meta.appendChild(el("span", null, c.msg_count + " 条"));
     if (c.ai_enabled === false) meta.appendChild(el("span", "cv-badge off", "人工接管"));
     item.appendChild(meta);
+
+    // ── 删除这个对话 ──
+    // ★ 按钮不放进 item.onclick 的冒泡里：否则点删除会先触发"切换到该会话"。
+    //   用 stopPropagation 挡住。
+    const del = el("button", "cv-del", "✕");
+    del.title = "删除这个对话";
+    del.onclick = (ev) => { ev.stopPropagation(); deleteConversation(c); };
+    item.appendChild(del);
+
     item.onclick = () => switchTo(c.session_id);
     box.appendChild(item);
+  }
+}
+
+/** 删除一个历史对话。
+ *
+ *  ★ 确认框里**逐条说明删了什么、留了什么**，而不是笼统问一句"确定删除？"。
+ *    因为这次删除是真的删（消息、图状态、工单里的对话快照都会清掉），
+ *    但**审查审计记录会按合规要求保留** —— 如果不说清楚，
+ *    用户以为"全删了"而实际留了审计，那是对他的误导；
+ *    反过来只写"确定删除"又会让人不敢点。
+ */
+async function deleteConversation(c) {
+  const title = c.title || "（无标题对话）";
+  const ok = window.confirm(
+    `删除这个对话？\n\n「${title}」\n\n`
+    + "会删掉：\n"
+    + "  · 这个对话的全部消息\n"
+    + "  · 它的会话记录与 AI 的执行状态\n"
+    + "  · 关联工单里保存的对话原文\n\n"
+    + "会保留（合规要求）：\n"
+    + "  · 内容审查的结论记录（不含对话原文）\n\n"
+    + "删除后无法恢复。");
+  if (!ok) return;
+
+  try {
+    const r = await api("/api/sessions/" + c.session_id, {method: "DELETE"});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // 409 是"正在人工处理中"—— 这条要单独说清楚，否则用户只会看到"删除失败"
+      addMsg("err", d.message || `删除失败（HTTP ${r.status}）`, [
+        {text: d.code === "session_has_open_ticket" ? "人工处理中" : "失败",
+         cls: d.code === "session_has_open_ticket" ? "warn" : "bad"},
+      ]);
+      return;
+    }
+    // 删的正是当前打开的会话 → 回到新对话状态，别让界面停在一个不存在的会话上
+    if (c.session_id === sid) newChat();
+    setStatus(d.message || "已删除该对话");
+    setTimeout(() => { if (!busy) setStatus(""); }, 4000);
+    await loadConversations();
+  } catch (e) {
+    addMsg("err", "删除失败：" + e.message);
   }
 }
 
@@ -1047,8 +1105,16 @@ function graphEl(tag, attrs) {
 }
 
 function graphDraw() {
-  if (!graphData) return;
+  // ★ 三道守卫，缺一不可。这套绘制是从 `clearTrace()` 里被调到的，而
+  //   `clearTrace()` 又在"新对话/切换会话/开始新一轮"这些**主路径**上 ——
+  //   也就是说这里一旦抛错，坏的不是"图没画出来"，而是**整个页面动不了**。
+  //   实测踩到过：/api/graph 返回了一个没有 architecture 的响应，
+  //   `graphLayout()` 抛错 → graphData 被赋了值但没有 _size →
+  //   此后的 `graphReset()` 在 `graphData._size` 上解构失败 → 新对话直接崩。
+  if (!graphData || !graphData._size || !graphData._layers) return;
+  if (!graphData.architecture || !graphData.architecture.layers) return;
   const svg = $("gSvg");
+  if (!svg) return;
   const {w, h} = graphData._size;
   svg.innerHTML = "";
   svg.setAttribute("viewBox", `${graphView.x} ${graphView.y} ${w / graphView.k} ${h / graphView.k}`);
@@ -1171,6 +1237,14 @@ function graphSummary() {
       + `</span>`;
   }).join("");
   const total = Object.keys(graphVisited).length;
+  const subHit = arch.subgraphs.filter((s) => s.nodes.some(ran)).length;
+  // 窗口标题上的迷你摘要：不点开也知道"这次走了多少、进了几个子图"
+  const inline = $("gSummaryInline");
+  if (inline) {
+    inline.textContent = total
+      ? `本次 ${total} 个节点 · ${subHit} 个子图`
+      : "等待提问";
+  }
   box.innerHTML = `<div class="gsum-title">本次对话经过：</div>`
     + `<div class="gsum-row">${chips.join("")}</div>`
     + `<div class="gsum-row">${subs}</div>`
@@ -1205,29 +1279,36 @@ function graphReset() {
 }
 
 async function graphEnsure() {
-  if (graphData) return true;
+  if (graphData && graphData._size) return true;
   try {
     const r = await api("/api/graph");
-    graphData = await r.json();
+    const data = await r.json();
+    // ★ 先校验再赋值：赋值了但没布局数据，后面的 graphDraw() 会一直失败，
+    //   而且失败点散在好几个调用处（见 graphDraw 的说明）。
+    if (!data || !data.architecture || !data.architecture.layers) {
+      throw new Error("架构数据不完整");
+    }
+    graphData = data;
     graphLayout();
     graphDraw();
     return true;
   } catch (e) {
-    $("gWrap").innerHTML = `<div class="trace-empty">工作流图加载失败：${e.message}</div>`;
+    graphData = null;                  // 保持"没数据"的一致状态，别留半成品
+    // ★ 用 el() + textContent 而不是拼 innerHTML：一是聊天页没有 esc() 这种
+    //   转义助手（坐席台才有），二是错误信息里可能带服务端返回的任意文本 ——
+    //   直接塞进 innerHTML 就是个注入口子。
+    const wrap = $("gWrap");
+    if (wrap) {
+      wrap.innerHTML = "";
+      wrap.appendChild(el("div", "trace-empty", "工作流架构加载失败：" + e.message));
+    }
     return false;
   }
 }
 
 function switchPane(which) {
-  const isGraph = which === "graph";
-  $("tabTrace").classList.toggle("active", !isGraph);
-  $("tabGraph").classList.toggle("active", isGraph);
-  $("paneTrace").hidden = isGraph;
-  $("paneGraph").hidden = !isGraph;
-  if (isGraph) graphEnsure();
+  void which;   // 两个窗口现在同屏展示，不再需要切换（保留函数名便于外部调用无副作用）
 }
-$("tabTrace").onclick = () => switchPane("trace");
-$("tabGraph").onclick = () => switchPane("graph");
 $("gFit").onclick = () => { graphView = {x: 0, y: 0, k: 1}; graphDraw(); };
 $("gZoomIn").onclick = () => { graphView.k = Math.min(2.5, graphView.k * 1.25); graphDraw(); };
 $("gZoomOut").onclick = () => { graphView.k = Math.max(0.4, graphView.k / 1.25); graphDraw(); };

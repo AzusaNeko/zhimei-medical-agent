@@ -375,6 +375,75 @@ async def main() -> int:
             check("GET /ops/panel 返回监控面板",
                   r.status_code == 200 and "坐席工作台" in r.text, str(r.status_code))
 
+            # ══════════════ 7 队列只含待处理 + 脱敏用户名 ══════════════
+            section("7. 队列：只列待处理的，并且用户名要脱敏")
+            # ★ 队列是"要做的事"，不是"做过的事"。已结束的工单留在里面，
+            #   坐席每次打开面板都要重扫一遍历史，真正待接单的那张被埋在下面；
+            #   更糟的是它的 msg_count 还会变，让面板误以为"这个顾客又说话了"。
+            r = await client.get("/ops/tickets",
+                                 params={"include_test": "true", "status": "closed"},
+                                 headers=H())
+            check("显式要 closed 时能查到已结束的工单（历史没丢）",
+                  r.status_code == 200, f"HTTP {r.status_code}")
+            r2 = await client.get("/ops/tickets", params={"include_test": "true"}, headers=H())
+            default_rows = r2.json()["tickets"]
+            check("默认队列里**没有**已结束的工单",
+                  all(t["status"] != "closed" for t in default_rows),
+                  str([(t["status"]) for t in default_rows]))
+            check("默认队列里的状态都在待处理集合内",
+                  all(t["status"] in ("open", "accepted", "in_progress", "escalated")
+                      for t in default_rows),
+                  str([t["status"] for t in default_rows]))
+
+            op_row = next((t for t in default_rows if t["ticket_id"] == tid), None)
+            if op_row:
+                check("队列行带等待时长（坐席据此排优先级）",
+                      isinstance(op_row.get("wait_seconds"), int),
+                      str(op_row.get("wait_seconds")))
+                check("队列行带 SLA 基准（前端画超时标记用）",
+                      isinstance(op_row.get("sla_seconds"), int),
+                      str(op_row.get("sla_seconds")))
+                nm = op_row.get("user_name") or ""
+                check("队列行带脱敏用户名（只留首字，其余打码）",
+                      bool(nm) and ("*" in nm or len(nm) == 1)
+                      and not any(c.isalnum() and c != nm[0] for c in nm[1:]),
+                      f"user_name={nm!r}")
+                check("脱敏后的名字里**不含原始全名**",
+                      not (op_row.get("_raw_name")
+                           and op_row["_raw_name"] == nm),
+                      f"user_name={nm!r}")
+
+            # ══════════════ 8 删除会话：工单快照要被抹掉、活动工单要挡住 ══════════════
+            section("8. 删除会话：活动工单挡住，工单里的对话原文抹掉")
+            r = await client.delete(f"/api/sessions/{sid}")
+            check("还有未结束工单时 → 409 session_has_open_ticket",
+                  r.status_code == 409
+                  and r.json().get("code") == "session_has_open_ticket",
+                  f"{r.status_code} {r.text[:120]}")
+            check("409 的文案说明了为什么不让删",
+                  "人工" in (r.json().get("message") or ""), r.text[:160])
+
+            # 关单之后再删
+            await client.post(f"/ops/tickets/{tid}/close", headers=H(),
+                              json={"reason": "删除会话测试前先关单"})
+            r = await client.delete(f"/api/sessions/{sid}")
+            check("关单后可以删除 → 200", r.status_code == 200, r.text[:140])
+
+            detail = (await client.get(f"/ops/tickets/{tid}", headers=H())).json()
+            check("工单行**保留**（审计不能删）",
+                  detail.get("ticket", {}).get("ticket_id") == tid, str(detail)[:120])
+            check("工单里的对话原文快照已抹掉（否则'删除'名不副实）",
+                  not (detail.get("ticket", {}).get("last_turns") or []),
+                  str(detail.get("ticket", {}).get("last_turns"))[:120])
+            check("工单里的 AI 草稿也一并抹掉",
+                  not (detail.get("risk_report") or {}).get("draft"),
+                  str((detail.get("risk_report") or {}).get("draft"))[:80])
+            check("保留的动作被如实标注（不假装是彻底抹除）",
+                  (detail.get("risk_report") or {}).get("transcript_deleted") is True,
+                  str(detail.get("risk_report"))[:160])
+            check("详情里的消息也空了（会话已删）",
+                  not (detail.get("messages") or []), str(len(detail.get("messages") or [])))
+
     print("\n" + "═" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
     for f in FAIL:

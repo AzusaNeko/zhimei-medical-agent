@@ -154,6 +154,59 @@ class PgStore:
             _uuid(session_id))
         return int(row["n"]) if row else 0
 
+    async def session_exists(self, session_id: str) -> bool:
+        """这个会话行还在不在（**只读，不会顺手建一行**）。
+
+        ★ 为什么需要单独一个方法：`get_session()` 在会话不存在时会返回一份
+          "默认值"（而不是 None），而 fake 那边更直接 —— `setdefault` 会把行
+          **建出来**。于是"删除之后会话还在不在"这个问题，
+          用 `get_session()` 去问会得到永远为真的答案，
+          "删除"看起来就没生效。探存在性必须用一个不产生副作用的入口。
+        """
+        row = await self._fetchrow(
+            "SELECT 1 AS ok FROM app.chat_session WHERE session_id = $1", _uuid(session_id))
+        return row is not None
+
+    async def delete_session(self, session_id: str) -> dict:
+        """删除一个会话及其**全部**内容，返回各表删了多少行。
+
+        ★ 为什么必须一次做四件事，而不是"删掉 chat_session 就行"：
+          数据散在四个地方，少清一处，"删除"就是假的 ——
+          用户以为对话没了，实际上还能从别的地方翻出来：
+
+            1. `app.chat_message` —— 对话本身（有外键，必须先删）
+            2. `app.chat_session` —— 会话行（列表、channel、ai_enabled 都在这）
+            3. `ops.handoff_ticket` —— 工单里存着 `last_turns`（最近 5 轮的**原文**
+               快照）和 `risk_report.draft`（AI 没发出去的草稿）。工单本身要留作
+               审计，但**对话原文必须抹掉**，否则"删除"名不副实。
+            4. LangGraph 的 checkpoint —— 整份图状态（含所有草稿与审查意见）。
+               这一项最容易漏：它在 `lg` schema 里，由 saver 自己建表，
+               代码里根本看不到。**不清它 = 删了个寂寞。**
+
+          ★ 调用方要先确保没有**未结束**的工单（见 API 层的保护条件）：
+            人工正在处理时把会话抽走，坐席会对着一个空详情页发呆。
+        """
+        sid = _uuid(session_id)
+        out = {"messages": 0, "session": 0, "tickets_scrubbed": 0}
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # ① 工单：留行、抹掉对话原文与草稿
+                status = await conn.execute(
+                    """UPDATE ops.handoff_ticket
+                          SET last_turns = '[]'::jsonb,
+                              risk_report = (risk_report - 'draft') || '{"transcript_deleted": true}'::jsonb
+                        WHERE session_id = $1""", sid)
+                out["tickets_scrubbed"] = int(str(status).split()[-1] or 0)
+                # ② 消息（chat_message.session_id 有外键，必须先删）
+                status = await conn.execute(
+                    "DELETE FROM app.chat_message WHERE session_id = $1", sid)
+                out["messages"] = int(str(status).split()[-1] or 0)
+                # ③ 会话行
+                status = await conn.execute(
+                    "DELETE FROM app.chat_session WHERE session_id = $1", sid)
+                out["session"] = int(str(status).split()[-1] or 0)
+        return out
+
     async def list_sessions(self, *, limit: int = 30,
                             channel: str | None = None,
                             user_id: str | None = None) -> list[dict]:
@@ -448,14 +501,20 @@ class PgStore:
           接管期间用户仍然可以发言（AI 不答，但消息会转给坐席），
           坐席台得知道什么时候该刷新详情 —— 队列快照 3 秒一帧，
           带上这个计数就不用为"有没有新消息"再开一个接口。
+
+        ★ `user_name` 是发起人的显示名，**在服务层脱敏后才给前端**（见
+          `ops.service.list_queue`）。这里给原值是因为同一个查询还要供
+          有明文权限的角色使用，脱敏只做一次、做在出口上。
         """
         rows = await self._fetch(
             """SELECT t.ticket_id, t.session_id, t.thread_id, t.user_id, t.reason,
                       t.priority, t.status, t.profile_summary, t.assigned_to,
                       t.accepted_at, t.closed_at, t.close_reason, t.created_at, t.is_test,
+                      u.display_name AS user_name,
                       (SELECT count(*) FROM app.chat_message m
                         WHERE m.session_id = t.session_id) AS msg_count
                FROM ops.handoff_ticket t
+               LEFT JOIN app.app_user u ON u.user_id = t.user_id
                WHERE ($1::text[] IS NULL OR t.status = ANY($1))
                  AND ($2::text[] IS NULL OR t.priority = ANY($2::text[]))
                  AND ($4::bool OR t.is_test = false)

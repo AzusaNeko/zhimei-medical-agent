@@ -73,6 +73,22 @@ def first(events: list[tuple[str, Any]], name: str) -> Any:
     return None
 
 
+async def _thread_exists(rt, thread_id: str) -> bool:
+    """这个 thread 在 checkpointer 里还有没有状态。
+
+    ★ 专门写一个辅助函数，是因为"删除会话"最容易漏的就是这一项：
+      checkpoint 在 `lg` schema 里、由 LangGraph 自己建表，
+      业务代码里一行都看不到 —— 不主动去查就永远发现不了它没被清掉。
+    """
+    saver = getattr(getattr(rt, "graph", None), "checkpointer", None)
+    if saver is None or not hasattr(saver, "aget_tuple"):
+        return False
+    try:
+        return (await saver.aget_tuple({"configurable": {"thread_id": thread_id}})) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def main() -> int:
     settings = Settings()
     object.__setattr__(settings, "profile", "fake")     # 不连任何外部依赖
@@ -252,6 +268,48 @@ async def main() -> int:
             r = await client.get("/api/sessions", params={"limit": 1})
             check("limit 生效（会话表只增不减，必须有上限）",
                   len(r.json()["sessions"]) <= 1, str(len(r.json()["sessions"])))
+
+            # ══════════════ 8 删除历史对话 ══════════════
+            section("8. 删除历史对话：真删，而不是从列表里藏起来")
+            # 为什么这几条重要：把"删除"做成假的（只从列表过滤掉）在界面上
+            # **看不出区别** —— 用户以为删了，内容还在库里躺着。
+            # 所以断言必须打到底层存储：消息没了、会话行没了、图状态清了。
+            r = await client.post("/api/sessions", json={"channel": "web"})
+            sid_del = r.json()["session_id"]
+            await client.post(f"/api/chat/{sid_del}/stream", json={"text": "这个会话待会儿要删掉"})
+            before = await rt.deps.pg.recent_turns(sid_del, limit=10)
+            check("删除前：会话里有消息", len(before) >= 2, f"{len(before)} 条")
+            check("删除前：图状态存在（checkpointer 里有这个 thread）",
+                  await _thread_exists(rt, sid_del), "图状态本来就不在，后面的断言没意义")
+
+            r = await client.delete(f"/api/sessions/{sid_del}")
+            check("DELETE /api/sessions/{sid} → 200", r.status_code == 200, r.text[:120])
+            body = r.json() if r.status_code == 200 else {}
+            check("响应里如实报告删了多少条消息",
+                  (body.get("removed") or {}).get("messages", 0) >= 2, str(body.get("removed")))
+            check("响应里如实说明**保留**了什么（不假装是彻底抹除）",
+                  "审计" in (body.get("kept") or ""), str(body.get("kept"))[:80])
+
+            check("消息真的没了（不是只从列表过滤）",
+                  not await rt.deps.pg.recent_turns(sid_del, limit=10), "消息还在库里")
+            check("会话行真的没了（用不会产生副作用的探针）",
+                  not await rt.deps.pg.session_exists(sid_del),
+                  "会话行还在 —— 注意不能用 get_session 探，它会顺手把行建出来")
+            check("图状态也清了（最容易漏的一项：它在另一个 schema 里）",
+                  not await _thread_exists(rt, sid_del),
+                  "checkpoint 里还留着整份图状态 —— 删除是假的")
+
+            r = await client.get("/api/sessions")
+            check("删除后不再出现在会话列表里",
+                  all(s["session_id"] != sid_del for s in r.json()["sessions"]),
+                  "列表里还能看到")
+
+            r = await client.get(f"/api/sessions/{sid_del}")
+            check("删除后再查这个会话 → 404（不归你就当作不存在）",
+                  r.status_code == 404, f"{r.status_code}")
+
+            r = await client.delete(f"/api/sessions/{sid_del}")
+            check("重复删除 → 404（幂等，不报 500）", r.status_code == 404, f"{r.status_code}")
 
     # ══════════════ 汇总 ══════════════
     print("\n" + "═" * 60)

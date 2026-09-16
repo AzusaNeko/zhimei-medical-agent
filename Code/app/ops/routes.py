@@ -332,7 +332,7 @@ def _queue_row(t: dict) -> dict:
     return {k: t.get(k) for k in ("ticket_id", "session_id", "reason", "priority", "status",
                                   "wait_seconds", "sla_seconds", "sla_breached",
                                   "accepted_at", "assigned_to", "context",
-                                  "is_test", "msg_count")}
+                                  "is_test", "msg_count", "user_name")}
 
 
 # ════════════════════════════════════════════════════════════════

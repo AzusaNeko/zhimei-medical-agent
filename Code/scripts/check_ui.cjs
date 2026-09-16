@@ -339,6 +339,34 @@ async function bootPage(html, { token, routes, local }) {
 
 const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
 
+/** 桩用的最小架构数据。所有 chat.html 场景都给一份 —— 因为架构窗口是常驻的，
+ *  登录后就会去取，缺了它页面会走"加载失败"分支（那条分支另有专门断言）。 */
+const MINI_ARCH = {
+  architecture: {
+    layers: [
+      {id: 'L0', title: '入口与调度层', hint: '标准化 → 意图 → 分派',
+       nodes: ['normalize', 'classify', 'dispatch']},
+      {id: 'L1', title: '草稿产出层 · 七路并行', hint: '只产出草稿',
+       nodes: ['k_agent', 'p_agent']},
+      {id: 'GATE', title: '聚合与必经关卡', hint: '必经', nodes: ['aggregate', 'risk_gate']},
+      {id: 'EXITS', title: '出口层', hint: '持有凭据', nodes: ['send', 'human_handoff']},
+    ],
+    decisions: ['dispatch', 'risk_gate'],
+    subgraphs: [
+      {id: 'kb', title: '知识科普子图', hint: '检索 → 证据', hosts: ['k_agent'],
+       entry: 'kb_intake', nodes: ['kb_intake', 'kb_draft']},
+      {id: 'risk', title: '风险审查子图', hint: '规则 + 面板', hosts: ['risk_gate'],
+       entry: 'gate_in', nodes: ['gate_in', 'issue_token']},
+    ],
+    edges: [['normalize', 'classify', ''], ['classify', 'dispatch', ''],
+            ['dispatch', 'k_agent', '科普咨询'], ['k_agent', 'aggregate', ''],
+            ['aggregate', 'risk_gate', ''], ['risk_gate', 'send', 'pass 通过']],
+    subgraph_edges: {},
+  },
+  graph: {nodes: [], sub_nodes: {}, sub_edges: {}},
+  warnings: [],
+};
+
 (async () => {
   // ── F1 坐席台：刷新后不该弹回登录页，且必须去连实时流 ──
   const panel = await bootPage(panelHtml, {
@@ -511,29 +539,37 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
     routes: {
       '/api/health': { profile: 'fake', checkpointer: 'memory' },
       '/api/auth/me': { user: { display_name: '演示用户' } },
-      '/api/graph': GRAPH_STUB,
+      '/api/graph': MINI_ARCH,
       '/api/sessions': { sessions: [] },
     },
   });
-  const tabBtn = chatG.els.get('tabGraph');
-  check('chat.html 有「工作流架构」这一栏', Boolean(tabBtn && tabBtn.onclick));
-  if (tabBtn && tabBtn.onclick) {
-    tabBtn.onclick();                                   // 切过去（会去取架构）
-    await new Promise((r) => setTimeout(r, 80));
-    const svg = chatG.els.get('gSvg');
-    const drawn = svg ? svg.children.length : 0;
-    check('切到工作流架构会真的画出来（SVG 里有层、节点和边）', drawn > 0,
-          `SVG 里还是空的（${drawn} 个子元素）—— 布局或绘制那一步断了`);
-    check('工作流架构请求了后端数据 /api/graph',
-          chatG.seen.some((u) => u.includes('/api/graph')),
-          '没有请求架构数据 —— 图是画不出来的');
-    const summary = String(chatG.els.get('gSummary') && chatG.els.get('gSummary').innerHTML);
-    check('渲染了"本次经过"摘要（哪几层 / 哪几个子图）',
-          summary.includes('本次对话经过') && summary.includes('知识科普子图'),
-          `摘要是：${summary.slice(0, 120)}`);
-    check('架构与代码一致时摘要不报警告',
-          !summary.includes('⚠'), summary.slice(0, 160));
-  }
+  const doc = chatG.ctx && chatG.ctx.document;
+  const paneG = doc && doc.getElementById('paneGraph');
+  const paneT = doc && doc.getElementById('paneTrace');
+  // ★ 两个窗口**同屏**：都没有被 hidden，而且是两个独立的容器
+  //   （各自有自己的标题栏与滚动区）。上一版是一栏切换，对照时要来回点。
+  check('chat.html 有两个独立的视图窗口（架构 + 轨迹）',
+        Boolean(paneG) && Boolean(paneT) && paneG !== paneT,
+        `paneGraph=${Boolean(paneG)} paneTrace=${Boolean(paneT)}`);
+  check('两个窗口**同时可见**（不再是一栏切换）',
+        Boolean(paneG) && paneG.hidden === false
+        && Boolean(paneT) && paneT.hidden === false,
+        `paneGraph.hidden=${paneG && paneG.hidden} paneTrace.hidden=${paneT && paneT.hidden}`);
+  check('已移除"切换栏"的按钮（两个都常驻，不需要切）',
+        !doc.getElementById('tabGraph') && !doc.getElementById('tabTrace'),
+        '还留着切换按钮');
+  check('工作流架构请求了后端数据 /api/graph',
+        chatG.seen.some((u) => u.includes('/api/graph')),
+        '没有请求架构数据 —— 图是画不出来的');
+  const svg = doc.getElementById('gSvg');
+  const drawn = svg ? svg.children.length : 0;
+  check('架构窗口在同屏状态下就画出来了（不用点任何东西）', drawn > 0,
+        `SVG 里是空的（${drawn} 个子元素）—— 布局或绘制那一步断了`);
+  const summary = String(doc.getElementById('gSummary').innerHTML);
+  check('渲染了"本次经过"摘要（哪几层 / 哪几个子图）',
+        summary.includes('本次对话经过') && summary.includes('知识科普子图'),
+        `摘要是：${summary.slice(0, 120)}`);
+  check('架构与代码一致时摘要不报警告', !summary.includes('⚠'), summary.slice(0, 160));
   check('拓扑/架构不在前端写死（必须来自 /api/graph）',
         !/const\s+GRAPH\s*=|const\s+EDGES\s*=|const\s+LAYERS\s*=/.test(stripComments(scriptOf(chatHtml))),
         '前端出现了写死的架构常量 —— 那会和设计图、代码三方漂移');
@@ -552,6 +588,7 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
       '/api/health': { profile: 'fake', checkpointer: 'memory' },
       '/api/auth/me': { user: { display_name: '演示用户' } },
       '/api/sessions': { sessions: [] },
+      '/api/graph': MINI_ARCH,
       ['/api/sessions/' + SID]: { session: { session_id: SID, ai_enabled: true }, messages: [] },
     },
   });
@@ -626,6 +663,67 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
   check('角标文案与实际行为用同一个判断（短文本不会标成"逐字呈现"）',
         /typingEligible\(/.test(chatJs) && /typingEligible\(full\)/.test(chatJs),
         '角标和渲染各写了一套条件 —— 短文本会标着逐字呈现却整段出现');
+
+  // ── J. 删除历史对话 ──
+  //
+  //  ★ 删除要问确认，而"确认框写了什么"是有产品含义的：
+  //    这次删除是真的删（消息 / 会话 / 图状态 / 工单里的对话快照），
+  //    但**审查审计记录按合规要求保留**。所以确认框必须把"删什么、留什么"
+  //    逐条说清 —— 只写"确定删除？"会让人不敢点，写成"全部彻底删除"
+  //    又是误导（审计其实留着）。
+  console.log('\nJ. 删除历史对话');
+  const del = await bootPage(chatHtml, {
+    token: TOKEN,
+    local: { 'zhimei.currentSession': SID },
+    routes: {
+      '/api/health': { profile: 'fake', checkpointer: 'memory' },
+      '/api/auth/me': { user: { display_name: '演示用户' } },
+      '/api/graph': MINI_ARCH,
+      '/api/sessions': { sessions: [{ session_id: SID, title: '要删掉的对话',
+                                      ai_enabled: true, message_count: 3 }] },
+      ['/api/sessions/' + SID]: { session: { session_id: SID, ai_enabled: true },
+                                  messages: [{ role: 'user', content: '你好' }] },
+    },
+  });
+  const ddoc = del.ctx && del.ctx.document;
+  const convList = ddoc && ddoc.getElementById('convList');
+  const rowEl = convList && convList.children[0];
+  const delBtn = rowEl && rowEl.children.find((c) => /cv-del/.test(String(c.className)));
+  check('会话列表每一行都有删除按钮', Boolean(delBtn),
+        `行内元素：${rowEl && rowEl.children.map((c) => c.className)}`);
+  if (delBtn && ddoc) {
+    // ① 先点"取消"（confirm=false）→ 不该发请求
+    let asked = "";
+    del.ctx.confirm = (msg) => { asked = String(msg); return false; };
+    // ★ 注意：开机时 afterLogin → switchTo 已经拉过一次会话详情了，
+    //   所以这里要比**增量**，不能比"有没有出现过" —— 否则永远为真。
+    const openCount = () => del.seen.filter(
+      (u) => u.includes('/api/sessions/' + SID) && u.includes('limit=60')).length;
+    const opensBefore = openCount();
+    const before = del.seen.length;
+    delBtn.onclick({ stopPropagation() {} });
+    await new Promise((r) => setTimeout(r, 60));
+    check('确认框里逐条说明了"删什么"和"留什么"',
+          asked.includes("会删掉") && asked.includes("会保留（合规要求）"),
+          `确认文案：${asked.slice(0, 80)}`);
+    check('点删除不会连带触发"切换到该会话"（冒泡被挡住了）',
+          openCount() === opensBefore,
+          `会话详情请求从 ${opensBefore} 涨到 ${openCount()} —— 点击冒泡到了整行`);
+    check('用户取消时**不发**删除请求', del.seen.length === before,
+          `又发了 ${del.seen.length - before} 个请求`);
+
+    // ② 点"确定"（confirm=true）→ 该发 DELETE
+    del.ctx.confirm = () => true;
+    delBtn.onclick({ stopPropagation() {} });
+    await new Promise((r) => setTimeout(r, 60));
+    check('确认后才真的发 DELETE 请求',
+          del.seen.some((u) => u.includes('/api/sessions/' + SID)),
+          `请求过：${[...new Set(del.seen)].slice(-4)}`);
+  }
+  check('删除调用的是 DELETE 方法（不是"标记隐藏"这类变通）',
+        /api\("\/api\/sessions\/" \+ c\.session_id, \{method: "DELETE"\}\)/.test(
+          stripComments(scriptOf(chatHtml))),
+        '没有找到 DELETE 调用');
 
   console.log(`\n${'═'.repeat(56)}`);
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);

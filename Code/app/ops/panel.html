@@ -53,6 +53,14 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .badge.warn{background:#ffe3de;color:#8a2a1e}
 .badge.ok{background:#e6f4ee;color:#1a5044}
 .row .sub{color:var(--muted);font-size:12.5px}
+/* 队列行里的发起人与等待时长：这是坐席扫队列时最先看的两件事 */
+.row .who{color:var(--ink);font-weight:600}
+.row .sub b{color:var(--ink);font-weight:600}
+.row .sub b.over{color:var(--p0)}
+.row .sub .muted{color:#9aa8b2}
+/* 「对话原文已被顾客删除」的提示：必须显眼，否则坐席会以为系统坏了 */
+.tdel{margin:0 0 10px;padding:9px 12px;border-radius:7px;background:#fff4dd;
+      border:1px solid #e6d3a8;color:#6d4c08;font-size:12.5px;line-height:1.6}
 .section{padding:14px 18px;border-bottom:1px solid #eef2f5}
 .section h3{margin:0 0 8px;font-size:13px;color:var(--muted);letter-spacing:.5px}
 .kv{display:grid;grid-template-columns:88px 1fr;gap:4px 10px;font-size:13px}
@@ -183,6 +191,12 @@ function headers() {
 let me = null;   // 当前坐席（登录后由服务端返回）
 let myPerms = [];  // 当前坐席的权限清单（前端据此显示/隐藏按钮；服务端仍会再判一次）
 let detailMsgCount = null;  // 详情里那台会话的消息条数（发现"顾客又说话了"）
+
+//: **待处理**状态。与服务端 `ops.service.ACTIVE_STATUSES` 是同一份约定。
+//: ★ 前端也要有一份，是因为"要不要继续跟踪这个工单的新消息"这个判断在客户端 ——
+//:   而边界很清楚：工单结束 = 人工退场 = 顾客再说话是找 AI 的，
+//:   不该再推到坐席面前。两侧不一致的话，就会出现"关单后还在收顾客请求"。
+const ACTIVE_STATUSES = ["open", "accepted", "in_progress", "escalated"];
 
 async function api(url, opts = {}) {
   const r = await fetch(url, opts);
@@ -333,9 +347,10 @@ async function purgeTest() {
 }
 
 function renderQueue() {
-  $("queueCount").textContent = `共 ${state.tickets.length} 条`;
+  $("queueCount").textContent = `共 ${state.tickets.length} 条待处理`;
   if (!state.tickets.length) {
-    $("queue").innerHTML = '<div class="empty">当前没有待处理工单</div>';
+    $("queue").innerHTML = '<div class="empty">当前没有待处理工单<br>'
+      + '<span style="font-size:11.5px">（已结束的工单不在队列里）</span></div>';
     return;
   }
   $("queue").innerHTML = state.tickets.map((t) => `
@@ -348,7 +363,12 @@ function renderQueue() {
         ${t.is_test ? '<span class="badge test">测试</span>' : ""}
         ${t.sla_breached ? '<span class="badge warn">已超时</span>' : ""}
       </div>
-      <div class="sub">等待 ${fmtWait(t.wait_seconds)} · ${esc(t.context)}</div>
+      <div class="sub">
+        <span class="who" title="发起人（队列里只显示首字，看全名请点开详情）">${esc(t.user_name || "（未登记）")}</span>
+        · 已等待 <b class="${t.sla_breached ? "over" : ""}">${fmtWait(t.wait_seconds)}</b>
+        <span class="muted">/ SLA ${fmtWait(t.sla_seconds)}</span>
+      </div>
+      <div class="sub">${esc(t.context)}</div>
       <div class="sub">工单 ${esc(String(t.ticket_id).slice(0, 8))}… · 会话 ${esc(String(t.session_id).slice(0, 8))}…</div>
     </div>`).join("");
   $("queue").querySelectorAll(".row").forEach((el) =>
@@ -393,6 +413,11 @@ function renderDetail() {
     `<div class="msg ${esc(m.role)}">${esc(m.content)}</div>`).join("");
 
   $("detail").innerHTML = `
+    ${rp.transcript_deleted ? `<div class="tdel">
+      <b>对话原文已被顾客删除。</b>按用户的删除请求，本工单里保存的对话快照与
+      AI 草稿已抹除；审查结论（下面的规则命中与面板意见）按合规要求保留。
+      所以下面的对话区是空的 —— 这是**预期行为**，不是系统故障。
+    </div>` : ""}
     <div class="section">
       <h3>工单</h3>
       <dl class="kv">
@@ -582,6 +607,14 @@ function handleEvent(chunk) {
  *    而接管期间顾客仍然可以继续说话（AI 不答，消息转给坐席）——
  *    没有这个刷新，坐席会一直盯着一份过期对话，
  *    等顾客补充的"我疼得更厉害了"永远不出现。
+ *
+ *  ★ 但**只对未结束的工单**做这件事。工单关掉之后 AI 已经恢复自动回复，
+ *    顾客再说话是找 AI 的，不该再推给坐席 —— 之前没有这个判断，
+ *    表现就是"工单都结束了，还能收到顾客发来的请求"，
+ *    而且队列里那张已关的工单 msg_count 一直在变，提示会反复弹。
+ *    这不是"消息多一点"，而是**职责边界错了**：人工已经退场，
+ *    系统却还在把顾客的话往人工这边送。
+ *
  *  ★ 只刷新**打开的**那一张，且只在这里拉一次详情，不额外开轮询接口。
  */
 async function maybeRefreshDetail() {
@@ -593,6 +626,12 @@ async function maybeRefreshDetail() {
   if (detailMsgCount === null) { detailMsgCount = n; return; }   // 首次只记录
   if (n !== detailMsgCount) {
     detailMsgCount = n;
+    // 工单已经不在待处理集合里（关掉了/被清理了）→ 停止跟踪，
+    // 让坐席看到的最后一份内容留在屏幕上，不再打扰他
+    if (!ACTIVE_STATUSES.includes(row.status)) {
+      toast("该工单已结束，不再跟踪新消息（AI 已接手）", false);
+      return;
+    }
     await openTicket(state.current, {silent: true});
     toast("顾客补充了新内容，已刷新", false);
   }

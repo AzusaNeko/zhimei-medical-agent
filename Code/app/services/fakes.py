@@ -178,6 +178,38 @@ class FakePg:
             "human_request_count": 0,
         })
 
+    async def session_exists(self, session_id: str) -> bool:
+        """与 PgStore 同形：只读探存在性。
+
+        ★ 不能用 get_session() 代替 —— 它走的是 setdefault，会把行建出来。
+          真实库那边 get_session() 也会返回一份"默认值"而不是 None。
+          两边都无法回答"还在不在"，所以这个入口是必需的。
+        """
+        return session_id in self.sessions
+
+    async def delete_session(self, session_id: str) -> dict:
+        """与 PgStore 同形：删消息 + 会话，并把工单里的对话快照抹掉。
+
+        ★ 假的这一侧也必须抹 `last_turns`：不然"删除后还能从工单里翻出原文"
+          这个 bug 只在真实库上被修掉，fake 档位永远测不出来。
+        """
+        out = {"messages": 0, "session": 0, "tickets_scrubbed": 0}
+        keep = [m for m in self.messages if m.get("session_id") != session_id]
+        out["messages"] = len(self.messages) - len(keep)
+        self.messages = keep
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+            out["session"] = 1
+        for t in self.tickets:
+            if t.get("session_id") == session_id:
+                t["last_turns"] = []
+                rep = dict(t.get("risk_report") or {})
+                rep.pop("draft", None)
+                rep["transcript_deleted"] = True
+                t["risk_report"] = rep
+                out["tickets_scrubbed"] += 1
+        return out
+
     async def count_takeover_messages(self, session_id: str) -> int:
         """与 PgStore 同形：数接管期间顾客发的消息条数。"""
         return sum(1 for m in self.messages
@@ -191,9 +223,21 @@ class FakePg:
         return sess["human_request_count"]
 
     async def load_auth(self, session_id: str) -> dict:
-        return {"verified": True, "user_id": "U-0001",
-                "scopes": ["profile", "booking"],
-                "data_consents": ["profile"]}
+        """与 PgStore 同形：**从会话行读 user_id**，不要硬编码。
+
+        ★ 原来这里写死 `"U-0001"`，于是 fake 档位下不管谁登录，
+          会话与工单都被归到同一个虚构用户身上。表现之一：
+          坐席队列里**永远查不到发起人的名字**（`list_tickets` 要 join `app_user`），
+          而真实档位是好的 —— 又是一个"fake 比真实世界宽松"的例子。
+
+        ★ 真实档位没有绑定用户的会话返回 `verified=False`，这里照做：
+          两边行为一致，才能靠 fake 档位测出权限相关的行为。
+        """
+        uid = (self.sessions.get(session_id) or {}).get("user_id")
+        if not uid:
+            return {"verified": False, "user_id": None, "scopes": [], "data_consents": []}
+        return {"verified": True, "user_id": str(uid),
+                "scopes": ["profile", "booking"], "data_consents": ["profile"]}
 
     async def save_message(self, *, session_id: str, turn_id: str | None, role: str,
                            content: str, content_hash: str | None = None,
@@ -457,7 +501,9 @@ class FakePg:
         for t in rows[:limit]:
             sid = t.get("session_id")
             n = sum(1 for m in self.messages if m.get("session_id") == sid)
-            out.append({**t, "msg_count": n})
+            u = self.users.get(t.get("user_id")) or {}
+            out.append({**t, "msg_count": n,
+                        "user_name": u.get("display_name")})
         return out
 
     async def purge_test_tickets(self) -> int:

@@ -132,6 +132,80 @@ async def graph_topology(request: Request,
     return _topology(_rt(request))
 
 
+@router.delete("/sessions/{session_id}", response_model=dict)
+async def delete_session(session_id: str, request: Request,
+                         user: Principal = Depends(current_user)) -> dict:
+    """删除一个历史对话（连同它的全部内容）。
+
+    ★ 做的是**真删除**，不是"从列表里藏起来"。四样东西一起清：
+      消息、会话行、工单里的对话快照（`last_turns` / 草稿）、
+      LangGraph 的 checkpoint（整份图状态）。
+      少清一样，"删除"就是假的 —— 尤其是 checkpoint，它在另一个 schema 里，
+      代码里根本看不到，最容易漏（`_purge_graph_state`）。
+
+    ★ 但有一条**保护条件**：会话还有未结束的工单时拒绝删除。
+      人工正在处理这件事，把会话抽走会让坐席对着一个空详情页发呆，
+      而他手上没有任何线索能解释发生了什么。返回 409 并说明原因，
+      让用户先在会话里把人工的事办完（或联系客服关单）。
+
+    ★ 审计记录**故意保留**：`app.review_audit`（裁决结论与规则命中）和
+      工单行本身不删 —— 医美系统里"顾客说过什么"可以删，
+      "系统当时为什么放行/拦截"不能删。响应里如实说明删了什么、留了什么，
+      不假装这是一次彻底的抹除。
+    """
+    rt = _rt(request)
+    await _own_session(rt, session_id, user.user_id)
+
+    ticket = await rt.deps.pg.open_ticket_for_session(session_id)
+    if ticket is not None:
+        raise HTTPException(status_code=409, detail={
+            "code": "session_has_open_ticket",
+            "message": "这个对话正在由人工客服处理中，暂时不能删除；"
+                       "等客服处理完（或请客服关单）之后再删。",
+        })
+
+    session = await rt.deps.pg.get_session(session_id)
+    thread_id = session.get("thread_id") or session_id
+    removed = await rt.deps.pg.delete_session(session_id)
+    graph_cleared = await _purge_graph_state(rt, thread_id)
+
+    logger.info("删除会话 session=%s thread=%s 结果=%s 图状态=%s",
+                session_id, thread_id, removed, graph_cleared)
+    return {
+        "deleted": True,
+        "session_id": session_id,
+        "removed": {**removed, "graph_state": graph_cleared},
+        "kept": "审计记录（审查裁决与规则命中）与工单行按合规要求保留，"
+                "但其中的对话原文与草稿已一并抹除",
+        "message": f"已删除该对话（{removed['messages']} 条消息）",
+    }
+
+
+async def _purge_graph_state(rt: Runtime, thread_id: str) -> bool:
+    """删掉这个 thread 在 checkpointer 里的全部状态。
+
+    ★ 这一项特别容易漏，因为它在 `lg` schema 里，由 LangGraph 自己建表，
+      业务代码里一行都看不到 —— 只删业务表的话，整份图状态
+      （包含所有草稿、审查意见、槽位）原封不动地躺在库里，
+      "删除对话"就成了假动作。
+
+    ★ 删失败不能反过来把请求判失败：业务数据已经删干净了，
+      这时报错只会让用户以为没删掉。但要**留日志**，因为残余状态是隐私问题。
+    """
+    try:
+        saver = getattr(getattr(rt, "graph", None), "checkpointer", None)
+        if saver is None or not hasattr(saver, "adelete_thread"):
+            logger.warning("checkpointer 不支持 adelete_thread，图状态未清理（thread=%s）",
+                           thread_id)
+            return False
+        await saver.adelete_thread(thread_id)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.exception("清理图状态失败（thread=%s）—— 业务数据已删，但图状态可能残留",
+                         thread_id)
+        return False
+
+
 @router.get("/sessions/{session_id}", response_model=dict)
 async def get_session(session_id: str, request: Request, limit: int = 10,
                       user: Principal = Depends(current_user)) -> dict:

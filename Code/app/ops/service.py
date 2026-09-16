@@ -39,13 +39,27 @@ class OpsError(Exception):
         self.code, self.message, self.status = code, message, status
 
 
+#: **待处理**的状态集合。队列默认只看这些。
+#:
+#: ★ 为什么默认要过滤：队列是"**要做的事**"，不是"做过的事"。
+#:   已结束（closed）的工单留在里面，坐席每次打开面板都要重新扫一遍历史，
+#:   真正待接单的那张反而被埋在下面 —— 而且它的 `msg_count` 还会变，
+#:   让面板误以为"这个顾客又说话了"，在工单结束之后继续弹提示。
+#:   要看历史得显式要（`statuses=["closed"]`）。
+ACTIVE_STATUSES: tuple[str, ...] = ("open", "accepted", "in_progress", "escalated")
+
+
 # ════════════════════════════════════════════════════════════════
 #  队列与详情
 # ════════════════════════════════════════════════════════════════
 async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = None,
                      priorities: list[str] | None = None, include_test: bool = False,
                      limit: int = 50) -> list[dict]:
-    rows = await rt.deps.pg.list_tickets(statuses=statuses, priorities=priorities,
+    # ★ 不给 statuses 就默认只要待处理的 —— 见 ACTIVE_STATUSES 的说明。
+    #   放在**服务层**而不是路由层：这样所有调用方（REST、SSE 快照）自动一致，
+    #   不会出现"接口过滤了、推送没过滤"这种两套口径的老毛病。
+    effective = list(statuses) if statuses else list(ACTIVE_STATUSES)
+    rows = await rt.deps.pg.list_tickets(statuses=effective, priorities=priorities,
                                          include_test=include_test, limit=limit)
     now = datetime.now(timezone.utc)
     out = []
@@ -73,8 +87,31 @@ async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = 
             "msg_count": int(t.get("msg_count") or 0),
             # 队列行必须能看出"这事大概是什么"，否则坐席得点进去才知道要不要先接
             "context": _context_line(t.get("profile_summary"), t.get("reason")),
+            # ★ 发起人（**脱敏**）。坐席在队列里需要知道"这是谁的事"才好排优先级，
+            #   但队列是一屏几十行的列表，没必要把姓名全摊开 ——
+            #   只留姓，后面一律打码。要看全名点进详情（那里按角色权限决定）。
+            "user_name": _mask_name(t.get("user_name")),
         })
     return out
+
+
+#: 队列行里给名字打码。
+def _mask_name(name: Any) -> str:
+    """只保留**第一个字**，其余打码。拿不到名字就给个中性占位。
+
+    ★ 为什么连"姓 + 名"都不给：队列是**一屏几十行**的列表，
+      坐席扫一眼只需要区分"是不是同一个人的事"。全名在这个场景里没有增量信息，
+      却把一批顾客的姓名集中暴露在一个页面上 —— 收益为零、风险非零。
+      要看全名，点进详情（那里有按角色的明文权限控制，而且一次只看一个人）。
+
+    ★ 单字名字（如"李"）原样返回：再打码就没有信息了，而且那种名字本身极短。
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return "（未登记）"
+    if len(raw) == 1:
+        return raw
+    return raw[0] + "*" * (len(raw) - 1)
 
 
 async def get_detail(rt: Runtime, agent: Agent, ticket_id: str) -> dict:
@@ -144,6 +181,10 @@ async def get_detail(rt: Runtime, agent: Agent, ticket_id: str) -> dict:
             "escalation_independent": report.get("escalation_independent"),
             "same_family_review": bool(report.get("escalation_used")
                                        and report.get("escalation_independent") is False),
+            # ★ 顾客删掉了这个对话。必须显式告诉坐席 ——
+            #   否则他看到的是一个**空白的**会话详情，会以为系统坏了，
+            #   或者以为顾客什么都没说过。两种误判都会让他接错话。
+            "transcript_deleted": bool(report.get("transcript_deleted")),
         },
     }
 
