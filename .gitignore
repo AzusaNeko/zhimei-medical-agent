@@ -64,10 +64,12 @@ desktop.ini
 
 # ── 本地临时文件 ──
 # git commit -F <文件> 用的提交信息草稿。这类文件就在仓库目录里，
-# 一旦在删除之前跑了 git add -A 就会被误提交（本项目真发生过两次，
-# 第二次是因为只按 .tmp 后缀过滤、换成 .txt 又漏了）。
-# 所以这里把常见命名一次性覆盖全，并且写明原因防止后人再精简掉。
-commitmsg.txt
-.commit-msg*
-.git-commit-msg.txt
+# 一旦在删除之前跑了 git add -A 就会被误提交 —— **本项目已经误提交过三次**，
+# 每次都是"换了个文件名就漏了"（先是 .commit-msg.tmp，再是 commitmsg.txt，
+# 再是 msg2.txt）。所以这次不再逐个列举，直接用根目录锚定的宽匹配：
+# 以 / 开头 = 只匹配仓库根，不会误伤子目录里正常叫 msg.txt 的文件。
+/commit*.txt
+/msg*.txt
+/.commit-msg*
+/.git-commit-msg.txt
 *.tmp
