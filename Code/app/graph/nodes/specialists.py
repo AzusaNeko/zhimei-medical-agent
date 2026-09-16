@@ -11,7 +11,7 @@ from typing import Callable
 
 from ...prompts import emergency as EM
 from ...prompts import understand as PU
-from ...prompts.system import render_slots
+from ...prompts.system import render_recent_turns, render_slots
 from ...services import text as T
 from ...services.deps import Deps
 from ..schemas import ClarifyOut, SpecialistDraftOut
@@ -177,6 +177,7 @@ def make_specialist_nodes(deps: Deps) -> dict[str, Callable]:
                     user_input=state.get("user_input", ""),
                     slots=render_slots(state.get("slots")),
                     missing="、".join(missing) or "未知",
+                    recent_turns=render_recent_turns(state.get("recent_turns") or []),
                     templates="\n".join(f"- {k}: {v}" for k, v in templates.items())))
             content, gaps = out.content or fallback, list(out.gaps)
         except Exception:  # noqa: BLE001

@@ -75,8 +75,15 @@ def build_knowledge_subgraph(deps: Deps):
     async def kb_context(state: dict) -> dict:
         scopes = (state.get("auth") or {}).get("scopes", [])
         profile = await deps.pg.load_profile(state.get("user_id")) if "profile" in scopes else {}
+        # ★ 这里**故意不再重新查 recent_turns**。
+        #   原来它会 `recent_turns(session_id, limit=3)` 覆盖 state —— 但两个问题：
+        #     1) 本节点执行时，本轮用户消息已经由 normalize 落库了，
+        #        所以查出来的"最近对话"里**包含用户刚说的这句话**；
+        #        喂给模型等于把同一句话重复一遍，还可能让指代解析绕回它自己。
+        #     2) 子图内部没有任何地方读这个字段（读它的只有 classify 与 clarify，
+        #        都在主图），所以这次查询纯属白跑一次数据库。
+        #   recent_turns 的唯一来源是 normalize，且它是在保存本轮消息**之前**取的。
         return {
-            "recent_turns": await deps.pg.recent_turns(state.get("session_id", ""), limit=3),
             "audit_log": [{"event": "kb_context", "profile_authorized": bool(profile)}],
         }
 

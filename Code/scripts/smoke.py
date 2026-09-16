@@ -302,6 +302,25 @@ async def main() -> int:
     check("命中高风险标签 → 升级", esc(CLEAN, high=True) == "high_risk_tag")
     check("一份意见都没拿到 → 升级", esc([]) == "no_reviews")
 
+    # ══════════════ 11 跨轮记忆 ══════════════
+    section("11. 跨轮记忆（指代消解的基础）")
+    # 为什么专门测：`recent_turns` 是 state 里**声明了、也被读了、但从来没人写**的字段 ——
+    # classify 的 Prompt 里"最近对话"永远是"（无）"。后果是用户上一轮刚讲过
+    # "热玛吉和超声炮"，这一轮问"那个怎么样"，模型完全接不上，只会反问
+    # "您说的是哪个项目" —— 用户会感觉它失忆了。
+    # 这类"声明了但没人填充"的 state 字段没有任何机制会报错，只能靠断言盯住。
+    m = "smoke-mem"
+    first = await turn(graph, deps, m, "热玛吉和超声炮有什么区别")
+    check("首轮 recent_turns 为空（还没有历史）",
+          (first.get("recent_turns") or []) == [], str(first.get("recent_turns"))[:80])
+    second = await turn(graph, deps, m, "那个怎么样")
+    hist = second.get("recent_turns") or []
+    check("次轮拿到了历史", len(hist) >= 2, f"{len(hist)} 条")
+    check("历史里含上一轮的用户原话",
+          any("热玛吉和超声炮" in str(h.get("content")) for h in hist), str(hist)[:120])
+    check("历史里**不含**本轮这句话（取历史的时机必须在保存本轮之前）",
+          not any("那个怎么样" in str(h.get("content")) for h in hist), str(hist)[:160])
+
     await deps.shutdown()
 
     # ══════════════ 汇总 ══════════════

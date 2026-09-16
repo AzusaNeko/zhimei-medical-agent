@@ -60,6 +60,23 @@ def make_intake_nodes(deps: Deps) -> dict[str, Callable]:
         cleaned = T.clean(state.get("user_input", ""))
         flags = T.prescan(cleaned)
 
+        # ★ 取「之前的对话」必须在**保存本轮消息之前**。
+        #   反过来的话，用户这句话会作为最后一条出现在"最近对话"里，
+        #   于是 classify 看到的是"用户刚说了一遍"的重复内容 —— 白白占 token，
+        #   还可能让模型把指代解析到它自己身上。
+        #
+        # ★ 为什么必须在这里取、而不是让各节点自己查库：
+        #   这个字段原本只有 state 声明和读取，**没有任何地方写入**，
+        #   于是 classify 的 Prompt 里"最近对话"永远是"（无）"。
+        #   后果就是用户上一轮刚讲过"热玛吉和超声炮"，这一轮问"那个怎么样"，
+        #   模型完全接不上，只会反问"您说的是哪个项目"—— 用户会感觉它失忆了。
+        try:
+            recent_turns = await deps.pg.recent_turns(session_id, limit=6)
+        except Exception as exc:  # noqa: BLE001
+            # 取历史失败不能阻断对话，但留痕
+            recent_turns = []
+            flags = {**flags, "_history_failed": [str(exc)[:120]]}
+
         # ★ 用户消息必须落库：转人工时随工单携带的"最近 5 轮"就读这张表，
         #   不存的话坐席只能看到 AI 说过什么，看不到用户到底问了什么。
         turn_id = str(uuid.uuid4())
@@ -80,6 +97,7 @@ def make_intake_nodes(deps: Deps) -> dict[str, Callable]:
             "auth": auth,
             "user_input": cleaned,
             "slot_flags": flags,
+            "recent_turns": recent_turns,
             # ── 每轮重置（漏一个就会出现"上一轮的东西漏到这一轮"）──
             "review_round": 0,
             "revision_count": 0,
