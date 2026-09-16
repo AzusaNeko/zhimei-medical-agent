@@ -172,9 +172,17 @@ async def main() -> int:
         # ══════════════ 1 健康检查与会话 ══════════════
         section("1. 真实 HTTP：健康检查与会话")
         check("GET /api/health 返回 ok", health.get("status") == "ok", str(health))
-        check("档位与检查点后端正确",
-              health.get("profile") == "real" and health.get("checkpointer") == "postgres",
-              str(health))
+        # ★ 断言"档位与检查点后端必须配套"，而不是硬编码要求 real。
+        #   原来写死 profile=="real"，于是想拿 fake 档位快速看一眼界面时这条必红 ——
+        #   而它红得没有信息量（明明是配置选择，不是缺陷）。
+        #   真正该守的不变量是：real 必须落在 Postgres 上（会话要能跨进程恢复），
+        #   fake 必须落在内存上（否则本地起不来）。这条两种档位下都成立。
+        want_cp = {"real": "postgres", "fake": "memory"}.get(health.get("profile"))
+        check("档位与检查点后端配套",
+              want_cp is not None and health.get("checkpointer") == want_cp,
+              f"profile={health.get('profile')} checkpointer={health.get('checkpointer')}")
+        if health.get("profile") != "real":
+            print("    （当前是 fake 档位：跳过依赖真实库与真实模型的断言）")
 
         r = await client.post("/api/sessions", json={"channel": "live", "user_id": args.user})
         check("POST /api/sessions 建会话", r.status_code == 200, f"HTTP {r.status_code}")
@@ -329,6 +337,38 @@ async def main() -> int:
 
         r = await client.get("/ops/metrics", headers=OPS_HEADERS)
         check("GET /ops/metrics 可读", r.status_code == 200, f"HTTP {r.status_code}")
+
+        # ══════════════ 7 C 端页面与节点执行轨迹 ══════════════
+        section("7. C 端聊天页与节点执行轨迹")
+        r = await client.get("/chat")
+        check("GET /chat 返回聊天页", r.status_code == 200, f"HTTP {r.status_code}")
+        check("页面含节点元数据表（前端靠它显示中文名）",
+              "emergency_screen" in r.text, "未找到节点表")
+
+        s_tr = (await client.post("/api/sessions", json={"channel": "live"})).json()["session_id"]
+        _, _, ev_off = await sse(client, "POST", f"/api/chat/{s_tr}/stream",
+                                 {"text": "热玛吉和超声炮有什么区别？"})
+        check("不带 ?trace=1 时不发 node 事件（生产契约不变）",
+              "node" not in names(ev_off), str(names(ev_off)))
+
+        _, _, ev_on = await sse(client, "POST", f"/api/chat/{s_tr}/stream?trace=1",
+                                {"text": "再讲一次"})
+        node_evs = [d for n, d in ev_on if n == "node"]
+        check("带 ?trace=1 时发送 node 事件", len(node_evs) > 0, str(names(ev_on)[:8]))
+        check("node 事件字段齐全（node/seq/ms/ns）",
+              all(all(k in d for k in ("node", "seq", "ms", "ns")) for d in node_evs),
+              str(node_evs[:1]))
+        check("seq 单调递增（前端按它排序）",
+              [d["seq"] for d in node_evs] == sorted(d["seq"] for d in node_evs),
+              str([d["seq"] for d in node_evs][:10]))
+        check("主图与子图节点都被带出（说明 subgraphs=True 生效）",
+              any(not d["ns"] for d in node_evs) and any(d["ns"] for d in node_evs),
+              f"主图 {sum(1 for d in node_evs if not d['ns'])} / 子图 {sum(1 for d in node_evs if d['ns'])}")
+        check("最终仍有且只有一个 final（轨迹不影响出站契约）",
+              names(ev_on).count("final") == 1, str(names(ev_on)))
+        check("轨迹里不出现任何节点 patch 的内容字段（只暴露结构，不暴露正文）",
+              all(set(d) == {"node", "seq", "ms", "ns"} for d in node_evs),
+              str(sorted(set(k for d in node_evs for k in d))))
 
         # ══════════════ 6 角色权限（真实 HTTP 下的 403）══════════════
         section("6. 角色权限")

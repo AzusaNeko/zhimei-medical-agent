@@ -12,16 +12,20 @@ FastAPI 应用工厂。
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..ops.routes import router as ops_router
 from ..runtime import create_runtime
 from ..settings import Settings
 from .routes import router
+
+#: 单文件页面目录（C 端聊天页与运营面板一样，无构建步骤、由 FastAPI 直接托管）
+_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -42,6 +46,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(router)
     app.include_router(ops_router)      # 坐席工作台（/ops/panel 是单文件监控面板）
+
+    @app.get("/chat", response_class=HTMLResponse, include_in_schema=False)
+    async def chat_ui() -> HTMLResponse:
+        """C 端聊天页（单文件，无构建步骤）。
+
+        页面默认带 ?trace=1 请求节点执行轨迹 —— 那是给**演示与排障**用的。
+        真实线上要对顾客隐藏，前端把「显示执行轨迹」勾掉即可
+        （后端默认就是不发 node 事件的，见 events.EVENT_NODE）。
+        """
+        return HTMLResponse((_WEB_DIR / "chat.html").read_text(encoding="utf-8"))
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:

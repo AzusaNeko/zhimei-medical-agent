@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智美医美顾问 · 在线咨询</title>
+<style>
+:root{
+  --ink:#19344a; --muted:#586d7b; --line:#d7e1e7; --accent:#226b62; --accent2:#1b554e;
+  --bg:#f3f6f8; --card:#fff; --warn:#b3862a; --bad:#c8493a; --ok:#3f8a72;
+  --g-main:#19344a; --g-kb:#2f5d8a; --g-risk:#9a5b2a;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:14px/1.7 "Microsoft YaHei","PingFang SC",-apple-system,sans-serif}
+a,button{cursor:pointer;font:inherit}
+code,.mono{font-family:Consolas,"SF Mono",Menlo,monospace}
+
+/* ── 顶栏 ── */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
+        padding:12px 22px;background:#fff;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;line-height:1.25}
+.brand .eyebrow{font:11px Consolas,monospace;color:var(--accent);letter-spacing:1.6px}
+.brand b{font-size:16px;letter-spacing:.3px}
+.topbar .right{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted)}
+.pill{border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:#fbfcfd}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ced5;margin-right:5px}
+.dot.on{background:var(--ok)}
+.dot.busy{background:var(--warn);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.3}}
+
+/* ── 布局 ── */
+.wrap{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,1fr);
+      gap:16px;max-width:1500px;margin:16px auto;padding:0 22px 28px;align-items:start}
+@media(max-width:1080px){.wrap{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+      display:flex;flex-direction:column;overflow:hidden}
+.card>h2{margin:0;padding:12px 18px;font-size:14px;border-bottom:1px solid var(--line);
+         background:#fbfcfd;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.card>h2 .sub{font:12px Consolas,monospace;color:var(--muted);font-weight:400}
+
+/* ── 对话区 ── */
+.chat{height:calc(100vh - 132px);min-height:560px}
+.messages{flex:1;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:88%;padding:10px 14px;border-radius:12px;white-space:pre-wrap;word-break:break-word;
+     animation:rise .18s ease-out}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}}
+.msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+.msg.bot{align-self:flex-start;background:#f1f6f5;border:1px solid #dbe8e5;border-bottom-left-radius:3px}
+.msg.sys{align-self:center;background:#fff8e8;border:1px solid #f0e0bb;color:#6d4c08;
+         font-size:12.5px;max-width:96%;border-radius:8px;padding:9px 13px}
+.msg.err{align-self:center;background:#ffeceb;border:1px solid #f3cfcb;color:#8a2a1e;
+         font-size:12.5px;max-width:96%;border-radius:8px;padding:9px 13px}
+.msg .meta{display:block;margin-top:7px;font:11px Consolas,monospace;color:var(--muted);
+           letter-spacing:.2px}
+.msg.user .meta{color:#cfe6e2}
+.msg.bot .meta{color:var(--muted)}
+.tag{display:inline-block;font:11px Consolas,monospace;padding:1px 7px;border-radius:4px;
+     margin-right:6px;background:#e8f1fb;color:#17405f}
+.tag.ok{background:#e6f4ee;color:#1a5044}
+.tag.warn{background:#fff4dd;color:#6d4c08}
+.tag.bad{background:#ffe3de;color:#8a2a1e}
+
+/* 状态条 */
+.statusbar{display:none;align-items:center;gap:9px;padding:9px 18px;border-top:1px solid var(--line);
+           background:#fbfcfd;font-size:13px;color:var(--muted)}
+.statusbar.show{display:flex}
+.spin{width:13px;height:13px;border:2px solid #cfdde3;border-top-color:var(--accent);
+      border-radius:50%;animation:spin .7s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 输入区 */
+.composer{border-top:1px solid var(--line);padding:12px 18px;background:#fff}
+.composer .row{display:flex;gap:10px;align-items:flex-end}
+textarea{flex:1;min-height:52px;max-height:150px;resize:vertical;padding:10px 12px;border-radius:9px;
+         border:1px solid var(--line);font:inherit;color:var(--ink);line-height:1.6}
+textarea:focus{outline:none;border-color:#8fbfb3;box-shadow:0 0 0 3px #e8f2f0}
+button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:9px 15px;color:var(--ink)}
+button:hover:not(:disabled){background:#eef5f3;border-color:#8fbfb3}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover:not(:disabled){background:var(--accent2)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.examples{display:flex;flex-wrap:wrap;gap:7px;padding:10px 18px 0;border-top:1px solid #eef2f5;
+          margin-top:12px}
+.examples span{font-size:12px;color:var(--muted);padding:3px 0}
+.examples button{font-size:12.5px;padding:4px 11px;border-radius:999px;background:#f7faf9}
+.confirm{display:flex;gap:9px;margin-top:10px}
+.confirm button{font-size:13px;padding:7px 14px}
+
+/* ── 轨迹区 ── */
+.trace{height:calc(100vh - 132px);min-height:560px}
+.legend{padding:10px 18px;border-bottom:1px solid #eef2f5;font-size:12px;color:var(--muted);
+        display:flex;flex-wrap:wrap;gap:6px 14px;background:#fcfdfe}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;
+          vertical-align:middle}
+.nodes{flex:1;overflow-y:auto;margin:0;padding:8px 0;list-style:none}
+.node{display:grid;grid-template-columns:26px 1fr auto;gap:9px;align-items:center;
+      padding:6px 18px;border-left:3px solid transparent;animation:rise .16s ease-out}
+.node .idx{font:11px Consolas,monospace;color:#9fb0bb;text-align:right}
+.node .nm{font-size:13px;display:flex;align-items:center;gap:7px;min-width:0}
+.node .nm b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .id{font:10.5px Consolas,monospace;color:#9fb0bb}
+.node .ms{font:11px Consolas,monospace;color:var(--muted);white-space:nowrap}
+.node .llm{font:10px Consolas,monospace;padding:1px 5px;border-radius:3px;
+           background:#fff4dd;color:#6d4c08;flex:none}
+.node.g-kb{border-left-color:var(--g-kb);background:#f7fafd}
+.node.g-risk{border-left-color:var(--g-risk);background:#fdfaf6}
+.node.g-main{border-left-color:#e3eaee}
+.node.hot{background:#eaf4f2;border-left-color:var(--accent)}
+.node.hot .idx{color:var(--accent)}
+.trace-empty{color:var(--muted);font-size:13px;padding:22px 18px;text-align:center}
+.trace-foot{padding:11px 18px;border-top:1px solid var(--line);background:#fbfcfd;
+            font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 16px}
+.trace-foot b{color:var(--ink);font-weight:600}
+.hint{font-size:12px;color:var(--muted);padding:8px 18px 0;line-height:1.6}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="eyebrow">LANGGRAPH MULTI-AGENT</span>
+    <b>智美医美顾问 · 在线咨询</b>
+  </div>
+  <div class="right">
+    <span class="pill"><i class="dot" id="connDot"></i><span id="connText">未连接</span></span>
+    <span class="pill" id="profilePill">档位 —</span>
+    <label style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="traceOn" checked> 显示执行轨迹
+    </label>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- ══════ 左：对话 ══════ -->
+  <section class="card chat">
+    <h2>对话 <span class="sub" id="sidLabel">新会话</span></h2>
+    <div class="messages" id="messages"></div>
+    <div class="statusbar" id="statusbar"><i class="spin"></i><span id="statusText"></span></div>
+    <div class="composer">
+      <div class="row">
+        <textarea id="input" placeholder="说说你想了解的项目，或要办的事…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button class="primary" id="send">发送</button>
+      </div>
+      <div class="examples" id="examples">
+        <span>试试：</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════ 右：执行轨迹 ══════ -->
+  <aside class="card trace">
+    <h2>Agent 执行轨迹 <span class="sub" id="traceMeta">等待提问</span></h2>
+    <div class="legend">
+      <span><i style="background:var(--g-main)"></i>主图</span>
+      <span><i style="background:var(--g-kb)"></i>科普子图</span>
+      <span><i style="background:var(--g-risk)"></i>风险审查子图</span>
+      <span><i style="background:#fff4dd;border:1px solid #e6d3a8"></i>会调用大模型（烧 token）</span>
+    </div>
+    <ol class="nodes" id="nodes"></ol>
+    <div class="trace-foot" id="traceFoot" style="display:none"></div>
+    <div class="hint" id="traceHint">
+      提问后，这里会**按顺序实时**列出图里真正执行过的节点，
+      包括子图内部节点。耗时是相邻两次事件之间的间隔。
+    </div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════
+   节点元数据：中文名 / 所属图 / 是否调用大模型 / 一句话说明
+   —— 这是**文档**，不是从事件流推断出来的。事件流只给节点 id。
+   ══════════════════════════════════════════════════════════════ */
+const NODES = {
+  /* 主图 */
+  normalize:        {n:"输入标准化",       g:"main", llm:0, d:"脱敏、预扫描、落库、读权限"},
+  emergency_screen: {n:"紧急信号筛查",     g:"main", llm:0, d:"规则层词表匹配；命中则走急症快路径"},
+  classify:         {n:"意图识别",         g:"main", llm:1, d:"判断这句话想干什么 + 抽取槽位"},
+  dispatch:         {n:"总控调度",         g:"main", llm:1, d:"规划任务顺序，操作类排最前"},
+  k_agent:          {n:"科普子图",         g:"main", llm:0, d:"子图整体（内部节点见下方蓝色行）"},
+  r_agent:          {n:"项目推荐",         g:"main", llm:1, d:"基于画像与项目库给方向性建议"},
+  c_agent:          {n:"资质门店",         g:"main", llm:1, d:"查医生资质与门店信息"},
+  b_agent:          {n:"预约管理",         g:"main", llm:1, d:"查档期、查可改约的预约、生成方案"},
+  p_agent:          {n:"术后护理",         g:"main", llm:1, d:"术后注意事项与随访"},
+  clarify:          {n:"澄清追问",         g:"main", llm:1, d:"信息不足时提 2–3 个封闭式问题"},
+  emergency_draft:  {n:"急症固定模板",     g:"main", llm:0, d:"不经模型生成，直接取预审模板"},
+  aggregate:        {n:"草稿汇总",         g:"main", llm:0, d:"合并各 Agent 草稿，计算方案哈希"},
+  risk_gate:        {n:"风险审查关卡",     g:"main", llm:0, d:"★ 必经关卡：任何出站都要过这道门"},
+  output_type:      {n:"出口类型判定",     g:"main", llm:0, d:"决定是直接发送还是挂起等确认"},
+  await_confirm:    {n:"等待用户确认",     g:"main", llm:0, d:"挂起；恢复时代码会被重放"},
+  execute_op:       {n:"执行操作",         g:"main", llm:0, d:"校验凭据 → 幂等执行"},
+  receipt:          {n:"生成执行回执",     g:"main", llm:1, d:"把执行结果写成给用户看的话"},
+  set_result_kind:  {n:"结果送审标记",     g:"main", llm:0, d:"回执也要过审，不能直接发"},
+  recheck:          {n:"执行结果复审",     g:"main", llm:0, d:"第二类审查对象"},
+  final_check:      {n:"终检",             g:"main", llm:0, d:"出站前最后一次内容校验"},
+  feedback:         {n:"审查意见整理",     g:"main", llm:1, d:"把面板意见转成可执行的修改要点"},
+  retry_check:      {n:"修订预算检查",     g:"main", llm:0, d:"超预算就转人工，不允许无限改"},
+  revise:           {n:"退回修订",         g:"main", llm:0, d:"唯一用 Command(goto=) 的节点"},
+  plan_void:        {n:"方案作废",         g:"main", llm:0, d:"用户否认后清掉旧方案，防止误执行"},
+  send:             {n:"放行发送",         g:"main", llm:0, d:"★ 唯一能产生 final 事件的节点"},
+  human_handoff:    {n:"转人工",           g:"main", llm:0, d:"建工单；与 send 可并行"},
+  audit_block:      {n:"硬性阻断",         g:"main", llm:0, d:"命中 block 级规则，不出任何内容"},
+
+  /* 科普子图 */
+  kb_intake:    {n:"入口分流",         g:"kb", llm:0, d:"判断是首次进入还是被退回修订"},
+  kb_revise_in: {n:"修订再入",         g:"kb", llm:0, d:"带审查意见重新生成（不是只重新核对）"},
+  kb_context:   {n:"上下文装配",       g:"kb", llm:0, d:"拼装已知槽位与历史"},
+  kb_decompose: {n:"检索子任务拆分",   g:"kb", llm:1, d:"把口语问题拆成 2–5 个检索式"},
+  kb_clarify:   {n:"追问（缺信息）",   g:"kb", llm:1, d:"关键信息不足，先问清楚再答"},
+  kb_retrieve:  {n:"混合检索",         g:"kb", llm:0, d:"BGE-M3 dense+sparse → Milvus → RRF 融合"},
+  kb_evidence:  {n:"证据筛选与充分性", g:"kb", llm:1, d:"精排 + 阈值过滤；高影响问题做二次判断"},
+  kb_limit:     {n:"缩小回答范围",     g:"kb", llm:1, d:"证据不足时坦白说不知道，不编"},
+  kb_draft:     {n:"生成科普草稿",     g:"kb", llm:1, d:"每句事实都要挂 evidence 编号"},
+  kb_verify:    {n:"事实与引用核对",   g:"kb", llm:1, d:"逐句核对；软问题放行、硬问题回炉"},
+  kb_return:    {n:"交回待审草稿",     g:"kb", llm:0, d:"子图出口，只产出待审草稿"},
+
+  /* 风险审查子图 */
+  gate_in:         {n:"审查入口",         g:"risk", llm:0, d:"标准化审查请求，先做 PII 预扫描"},
+  review_input:    {n:"输入完整性与权限", g:"risk", llm:0, d:"身份未核验时操作类请求一律拦下"},
+  emergency_check: {n:"紧急信号复核",     g:"risk", llm:0, d:"规则层与模型提示的边界核对"},
+  hard_rules:      {n:"硬规则检查",       g:"risk", llm:0, d:"确定性规则，不调用模型"},
+  review_medical:  {n:"医疗边界审查",     g:"risk", llm:1, d:"是否越过科普进入医疗建议"},
+  review_ad:       {n:"广告合规审查",     g:"risk", llm:1, d:"疗效承诺、绝对化用语、制造焦虑"},
+  review_privacy:  {n:"隐私与越权审查",   g:"risk", llm:1, d:"敏感信息回显、越权表述"},
+  panel_fanin:     {n:"三审汇合",         g:"risk", llm:0, d:"等三个面板都出结果再往下"},
+  escalate_review: {n:"二次复核",         g:"risk", llm:1, d:"单模型下与首审同族，审计会如实标注"},
+  check_op:        {n:"敏感操作校验",     g:"risk", llm:0, d:"仅操作类走这里"},
+  biz_check:       {n:"业务前置校验",     g:"risk", llm:0, d:"档期/状态是否还成立"},
+  merge_verdict:   {n:"裁决表",           g:"risk", llm:0, d:"确定性决策表，不用模型拍板"},
+  issue_token:     {n:"签发放行凭据",     g:"risk", llm:0, d:"HMAC 绑定内容+方案+类别+有效期"},
+  handoff:         {n:"人工接管",         g:"risk", llm:0, d:"落工单 + 如实标注是否独立复核"},
+  block:           {n:"阻断出口",         g:"risk", llm:0, d:"硬性阻断终态"},
+  need_info:       {n:"资料不全出口",     g:"risk", llm:0, d:"要求先补齐信息"}
+};
+const GROUP_COLOR = {main:"var(--g-main)", kb:"var(--g-kb)", risk:"var(--g-risk)"};
+
+const EXAMPLES = [
+  "热玛吉和超声炮有什么区别？",
+  "帮我把热玛吉的预约改到浦东店周五下午",
+  "我做完水光第三天，现在脸发白还特别疼，眼睛也有点看不清",
+  "那个怎么样",
+  "你们的医生有执业资质吗？"
+];
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+};
+
+let sid = null;
+let busy = false;
+let pendingPlan = null;     // 挂起中的方案
+let nodeSeq = 0;
+
+/* ── 顶栏状态 ── */
+function setConn(state, text) {
+  $("connDot").className = "dot" + (state ? " " + state : "");
+  $("connText").textContent = text;
+}
+
+/* ── 消息渲染 ── */
+function addMsg(kind, text, meta) {
+  const m = el("div", "msg " + kind);
+  m.appendChild(document.createTextNode(text));
+  if (meta) {
+    const s = el("span", "meta");
+    meta.forEach((t, i) => {
+      if (i) s.appendChild(document.createTextNode("  "));
+      if (typeof t === "string") s.appendChild(document.createTextNode(t));
+      else { const b = el("span", "tag " + (t.cls || ""), t.text); s.appendChild(b); }
+    });
+    m.appendChild(s);
+  }
+  $("messages").appendChild(m);
+  $("messages").scrollTop = $("messages").scrollHeight;
+  return m;
+}
+function setStatus(text) {
+  $("statusbar").classList.toggle("show", !!text);
+  if (text) $("statusText").textContent = text;
+}
+function clearConfirm() {
+  document.querySelectorAll(".confirm").forEach((n) => n.remove());
+  pendingPlan = null;
+}
+
+/* ── 轨迹渲染 ── */
+function clearTrace() {
+  $("nodes").innerHTML = "";
+  $("traceFoot").style.display = "none";
+  $("traceMeta").textContent = "执行中…";
+  $("traceHint").style.display = "none";
+  nodeSeq = 0;
+}
+function addNode(d) {
+  const meta = NODES[d.node] || {n: d.node, g: "main", llm: 0, d: "（未登记的节点）"};
+  const li = el("li", "node g-" + meta.g);
+  nodeSeq += 1;
+  li.appendChild(el("span", "idx", String(nodeSeq)));
+  const nm = el("span", "nm");
+  nm.appendChild(el("b", null, meta.n));
+  nm.appendChild(el("span", "id", d.node));
+  if (meta.llm) nm.appendChild(el("span", "llm", "LLM"));
+  li.appendChild(nm);
+  li.appendChild(el("span", "ms", d.ms + "ms"));
+  li.title = meta.d + (d.ns && d.ns.length ? "\n子图：" + d.ns.join(" › ") : "");
+  $("nodes").appendChild(li);
+  // 只保留最近一条高亮，避免整列都在闪
+  document.querySelectorAll(".node.hot").forEach((n) => n.classList.remove("hot"));
+  li.classList.add("hot");
+  $("nodes").scrollTop = $("nodes").scrollHeight;
+}
+function finishTrace(ok) {
+  const rows = [...document.querySelectorAll(".node")];
+  if (!rows.length) return;
+  const total = rows.reduce((s, r) => {
+    const v = parseInt(r.querySelector(".ms").textContent, 10);
+    return s + (isNaN(v) ? 0 : v);
+  }, 0);
+  const llm = document.querySelectorAll(".node .llm").length;
+  const kb = document.querySelectorAll(".node.g-kb").length;
+  const risk = document.querySelectorAll(".node.g-risk").length;
+  $("traceMeta").textContent = `${rows.length} 个节点`;
+  const f = $("traceFoot");
+  f.innerHTML = "";
+  const add = (label, val) => {
+    const s = el("span");
+    s.appendChild(document.createTextNode(label + " "));
+    s.appendChild(el("b", null, String(val)));
+    f.appendChild(s);
+  };
+  add("节点数", rows.length);
+  add("调用大模型", llm);
+  add("科普子图", kb);
+  add("风险审查", risk);
+  add("事件间隔累计", total + "ms");
+  f.style.display = "flex";
+  if (!ok) {
+    const s = el("span", null, "（本轮出现错误或转人工）");
+    s.style.color = "var(--bad)";
+    f.appendChild(s);
+  }
+}
+
+/* ── SSE 解析（用 fetch + reader：EventSource 不能带自定义头，也无法 POST）── */
+async function stream(path, body) {
+  const useTrace = $("traceOn").checked;
+  const url = path + (useTrace ? "?trace=1" : "");
+  setConn("busy", "处理中");
+  clearConfirm();
+  let name = "?", ok = true;
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) {
+      let detail = {};
+      try { detail = (await r.json()); } catch (e) { /* 忽略 */ }
+      addMsg("err", "请求被拒绝（HTTP " + r.status + "）：" + (detail.message || ""));
+      ok = false;
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const blocks = buf.split("\n\n");
+      buf = blocks.pop();
+      for (const blk of blocks) {
+        for (const line of blk.split("\n")) {
+          if (line.startsWith("event: ")) name = line.slice(7).trim();
+          else if (line.startsWith("data: ")) {
+            let d = {};
+            try { d = JSON.parse(line.slice(6)); } catch (e) { /* 忽略坏帧 */ }
+            ok = handle(name, d) && ok;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    addMsg("err", "连接中断：" + e.message);
+    ok = false;
+  } finally {
+    setStatus("");
+    setConn("on", "已连接");
+    busy = false;
+    $("send").disabled = false;
+    finishTrace(ok);
+  }
+  return ok;
+}
+
+function handle(name, d) {
+  switch (name) {
+    case "node":
+      addNode(d);
+      return true;
+    case "status":
+      setStatus(d.text || "");
+      return true;
+    case "final":
+      addMsg("bot", d.text || "", [
+        {text: "已审正文", cls: "ok"},
+        "凭据 " + String(d.token || "").slice(0, 12) + "…",
+        "整段送达（不流式）"
+      ]);
+      return true;
+    case "awaiting_confirmation": {
+      pendingPlan = d;
+      const m = addMsg("sys", "以下操作需要你确认后才会执行：\n\n" + (d.plan || ""), [
+        {text: "等待确认", cls: "warn"},
+        "方案哈希 " + String(d.plan_hash || "").slice(0, 12) + "…"
+      ]);
+      const bar = el("div", "confirm");
+      const yes = el("button", "primary", "确认执行");
+      const no = el("button", null, "取消");
+      yes.onclick = () => {
+        clearConfirm();
+        addMsg("user", "确认执行");
+        stream("/api/chat/" + sid + "/confirm",
+               {confirmed: true, plan_hash: d.plan_hash});
+      };
+      no.onclick = () => {
+        clearConfirm();
+        addMsg("user", "取消");
+        stream("/api/chat/" + sid + "/confirm",
+               {confirmed: false, plan_hash: d.plan_hash});
+      };
+      bar.appendChild(yes);
+      bar.appendChild(no);
+      m.appendChild(bar);
+      $("messages").scrollTop = $("messages").scrollHeight;
+      return true;
+    }
+    case "handoff":
+      addMsg("sys", (d.text || "已转接人工客服。") + "\n\n工单 " +
+             String(d.ticket_id || "").slice(0, 8) + "… 优先级 " + (d.priority || ""), [
+        {text: "转人工", cls: "warn"}, "原因 " + (d.reason || "")
+      ]);
+      return true;
+    case "blocked":
+      addMsg("err", "本次内容被硬性阻断，未产生任何业务出站内容。命中规则：" +
+             (d.rule_ids || []).join("、"), [{text: "阻断", cls: "bad"}]);
+      return false;
+    case "error":
+      addMsg("err", "处理出错：" + (d.message || d.code || ""));
+      return false;
+    case "done":
+      return true;
+    default:
+      return true;
+  }
+}
+
+/* ── 发送 ── */
+async function send() {
+  const text = $("input").value.trim();
+  if (!text || busy) return;
+  $("input").value = "";
+  addMsg("user", text);
+  clearTrace();
+  busy = true;
+  $("send").disabled = true;
+  if (!sid) {
+    const r = await fetch("/api/sessions", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({channel: "web"})
+    });
+    sid = (await r.json()).session_id;
+    $("sidLabel").textContent = "会话 " + sid.slice(0, 8) + "…";
+  }
+  await stream("/api/chat/" + sid + "/stream", {text: text});
+}
+
+/* ── 初始化 ── */
+EXAMPLES.forEach((t) => {
+  const b = el("button", null, t.length > 18 ? t.slice(0, 17) + "…" : t);
+  b.title = t;
+  b.onclick = () => { $("input").value = t; send(); };
+  $("examples").appendChild(b);
+});
+$("send").onclick = send;
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+fetch("/api/health").then((r) => r.json()).then((h) => {
+  $("profilePill").textContent = "档位 " + h.profile + " · " + h.checkpointer;
+  setConn("on", "已连接");
+}).catch(() => setConn("", "离线"));
+
+addMsg("bot", "您好，我是智美医美的在线顾问。\n" +
+  "可以问我项目区别、恢复期、门店与医生资质，也可以让我帮您改约。\n" +
+  "涉及个人是否适合、具体方案与效果，需要面诊评估。", [{text: "开场白", cls: ""}]);
+</script>
+</body>
+</html>

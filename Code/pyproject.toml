@@ -29,7 +29,11 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["config/*.yaml"]
+# ★ 单文件页面也是「包数据」，必须显式列出来。
+#   原来只列了 config/*.yaml —— 而 app/ops/panel.html 没在列表里，
+#   于是 `pip install .` 装出来的包里根本没有这个文件，
+#   /ops/panel 会 500（源码目录里跑却一切正常，典型的"本地好好的"）。
+app = ["config/*.yaml", "ops/*.html", "web/*.html"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

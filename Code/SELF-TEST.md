@@ -218,7 +218,7 @@ python scripts/smoke_api.py                  # 26 项（会强制走 fake 档位
 # 终端 A
 python -m app.api --host 127.0.0.1 --port 8090
 # 终端 B
-python scripts/smoke_api_live.py --base http://127.0.0.1:8090 --user <user_id>   # 40 项
+python scripts/smoke_api_live.py --base http://127.0.0.1:8090 --user <user_id>   # 41 项
 ```
 
 **为什么它和 `smoke_api.py` 不是重复的**：`smoke_api.py` 走 `httpx.ASGITransport`，
@@ -244,6 +244,22 @@ python scripts/smoke_api_live.py --base http://127.0.0.1:8090 --user <user_id>  
 > **都**返回 Proactor，所以在 `__main__.py` 里 `set_event_loop_policy()` 完全没用
 > （循环是在策略生效之前就建好的）。解决办法是给 uvicorn 传一个自定义循环工厂：
 > `loop="app.api.loop:selector_loop_factory"`。详见 `app/api/loop.py` 的注释。
+
+### 6c. C 端聊天页与节点执行轨迹
+
+```bash
+node scripts/check_ui.cjs      # 静态校验，不需要起服务（语法 / 节点表同步 / DOM id）
+# 浏览器打开 http://127.0.0.1:8090/chat
+```
+
+- [ ] 左栏提问后，**过程状态逐条出现**（"正在理解您的问题…"），正文**最后整段到达**
+- [ ] 右栏轨迹按顺序实时追加，节点带中文名、子图配色与耗时
+- [ ] 科普问题**能看到 `kb_*` 开头的蓝色节点**（说明子图内部节点被带出来了）
+- [ ] 改约类问题**能看到操作确认卡片**，确认后才执行
+- [ ] 急症问题**只跑十几个节点、且没有 LLM 标记**（规则快路径，不烧 token）
+- [ ] 取消勾选「显示执行轨迹」后，右栏不再新增节点（后端确实没发）
+- [ ] `node scripts/check_ui.cjs` 全过 —— 尤其"前端节点表与后端 `add_node` 双向一致"
+      （这条守的是跨语言漂移：图里加了新节点、前端没跟上，界面上会冒出"（未登记的节点）"）
 
 ---
 
@@ -495,9 +511,9 @@ python scripts/llm_stats.py --failures            # 失败 / schema 重试的调
 `sql/schema.sql` 末尾的「类型约定」里：**系统自己生成的 id 用 UUID，
 外部系统给定的 id 用 TEXT**。
 
-修复后回归：`smoke` 71 + `smoke_api` 26 + `smoke_ops` 36 + `smoke_api_live` 40
-= **173 项全过**，`check_env` 18 通过 / 2 提醒 / 0 阻塞，`check_retrieval` 检索链路 OK，
-真实档位 `--demo` 四场景退出码 0。
+修复后回归：`smoke` 71 + `smoke_api` 26 + `smoke_ops` 36 + `smoke_api_live` 41
+= **174 项全过**，外加 `check_ui.cjs` 前端静态校验 5 项，`check_env` 18 通过 / 2 提醒 / 0 阻塞，
+`check_retrieval` 检索链路 OK，真实档位 `--demo` 四场景退出码 0。
 
 修复效果（真实档位实测，已排除统计口径干扰）：
 

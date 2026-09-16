@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
@@ -32,7 +33,7 @@ from ..runtime import Runtime
 from ..services import text as T
 from ..services import trace
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
-                     EVENT_STATUS, SSE_HEADERS, error_event, map_patch, ping, sse)
+                     EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch, ping, sse)
 from .schemas import ChatIn, ConfirmIn, CreateSessionIn, HealthOut, MessageOut, SessionOut
 
 router = APIRouter(prefix="/api")
@@ -100,7 +101,10 @@ async def get_session(session_id: str, request: Request, limit: int = 10) -> dic
 #  对话（SSE）
 # ════════════════════════════════════════════════════════════════
 @router.post("/chat/{session_id}/stream")
-async def chat_stream(session_id: str, body: ChatIn, request: Request) -> StreamingResponse:
+async def chat_stream(session_id: str, body: ChatIn, request: Request,
+                      trace: bool = Query(default=False,
+                                          description="是否发送节点执行轨迹（node 事件）。"
+                                                      "演示与排障用；生产环境保持 false")) -> StreamingResponse:
     rt = _rt(request)
     await _guard(rt, session_id)
     if not await rt.try_begin(session_id):
@@ -108,18 +112,20 @@ async def chat_stream(session_id: str, body: ChatIn, request: Request) -> Stream
                                                      "message": "该会话正在处理上一条消息"})
     payload = {"session_id": session_id, "user_input": body.text, "channel": "api",
                "attachments": body.attachments}
-    return _sse_response(_event_source(rt, session_id, payload))
+    return _sse_response(_event_source(rt, session_id, payload, trace_enabled=trace))
 
 
 @router.post("/chat/{session_id}/confirm")
-async def chat_confirm(session_id: str, body: ConfirmIn, request: Request) -> StreamingResponse:
+async def chat_confirm(session_id: str, body: ConfirmIn, request: Request,
+                       trace: bool = Query(default=False)) -> StreamingResponse:
     rt = _rt(request)
     await _guard(rt, session_id)
     if not await rt.try_begin(session_id):
         raise HTTPException(status_code=409, detail={"code": "busy",
                                                      "message": "该会话正在处理上一条消息"})
     resume = {"confirmed": body.confirmed, "plan_hash": body.plan_hash}
-    return _sse_response(_event_source(rt, session_id, Command(resume=resume)))
+    return _sse_response(_event_source(rt, session_id, Command(resume=resume),
+                                       trace_enabled=trace))
 
 
 async def _guard(rt: Runtime, session_id: str) -> None:
@@ -140,9 +146,15 @@ def _sse_response(source: AsyncIterator[str]) -> StreamingResponse:
 #  事件源
 # ════════════════════════════════════════════════════════════════
 async def _event_source(rt: Runtime, session_id: str,
-                        graph_input: Any) -> AsyncIterator[str]:
-    """把图的执行过程翻译成 SSE 流。无论成功失败都必须释放在途标记。"""
+                        graph_input: Any, *, trace_enabled: bool = False) -> AsyncIterator[str]:
+    """把图的执行过程翻译成 SSE 流。无论成功失败都必须释放在途标记。
+
+    trace_enabled=True 时额外发送 node 事件（节点执行轨迹），并开启 subgraphs=True
+    以便看到子图内部节点。**默认关闭**，原因见 events.EVENT_NODE 的注释。
+    """
     turn_id: str | None = None
+    seq = 0
+    last_at = time.perf_counter()
     # 把本轮 thread_id 放进上下文：模型网关据此把每次调用记到 app.llm_call_log。
     # ★ 这里用不带还原的 set_turn 而非 turn_scope：ASGI 每个请求本来就是独立任务、
     #   持有上下文的副本，请求结束整个上下文一起丢弃，不存在"漏给下一个请求"；
@@ -151,17 +163,29 @@ async def _event_source(rt: Runtime, session_id: str,
     try:
         async for item in _with_heartbeat(
                 lambda: rt.graph.astream(graph_input, rt.config(session_id),
-                                         stream_mode=["custom", "updates"]),
+                                         stream_mode=["custom", "updates"],
+                                         subgraphs=trace_enabled),
                 HEARTBEAT_SECONDS):
             if item is None:                       # 心跳
                 yield ping()
                 continue
-            mode, chunk = item
+            # ★ subgraphs=True 会把产出从 (mode, chunk) 变成 (namespace, mode, chunk)。
+            #   这里统一成 (namespace, mode, chunk)，让两条路径共用下面的处理逻辑 ——
+            #   否则就得维护两份几乎一样的解析代码，迟早改漏一边。
+            if trace_enabled:
+                namespace, mode, chunk = item
+            else:
+                namespace, (mode, chunk) = (), item
+
             if mode == "custom":
                 ev = progress.collect(chunk)
                 if ev:
                     yield sse(EVENT_STATUS, ev)
                 continue
+
+            now = time.perf_counter()
+            elapsed_ms = int((now - last_at) * 1000)
+            last_at = now
             for node, patch in (chunk or {}).items():
                 # ★ 挂起事件在 updates 流里是【顶层键】"__interrupt__"，不是某个节点的 patch。
                 #   早先只按"节点 → patch"处理，结果挂起被静默丢掉，前端永远等不到确认请求。
@@ -169,6 +193,19 @@ async def _event_source(rt: Runtime, session_id: str,
                     for name, data in map_patch("__interrupt__", {"__interrupt__": patch}):
                         yield sse(name, data)
                     continue
+                if trace_enabled:
+                    # ★ 只发 seq / ms / ns 三个字段，**不发"是否并行"**。
+                    #   原本我想用超步序号标注并行分支（三个审查面板是同一超步里被 Send
+                    #   分派出去的），但实测推翻了：48 个节点恰好占 48 个超步，
+                    #   连那三个并行面板也各自单独成块。所以从事件流里**推不出**并行关系，
+                    #   与其发一个语义撑不住的字段，不如只给能证实的东西 ——
+                    #   顺序（seq）、这一段耗时（ms）、属于哪个子图（ns）。
+                    #   前端对"哪些节点是并行的"用静态标注说明，那是文档，不是推断。
+                    seq += 1
+                    yield sse(EVENT_NODE, {
+                        "node": node, "seq": seq, "ms": elapsed_ms,
+                        "ns": list(namespace),
+                    })
                 if node == "normalize" and isinstance(patch, dict) and patch.get("turn_id"):
                     turn_id = patch["turn_id"]
                 for name, data in map_patch(node, patch):

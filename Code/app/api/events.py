@@ -18,6 +18,15 @@ EVENT_HANDOFF = "handoff"
 EVENT_BLOCKED = "blocked"
 EVENT_DONE = "done"
 EVENT_ERROR = "error"
+#: 节点执行轨迹 —— **默认不发送**，只有请求带 ?trace=1 时才有。
+#:
+#: 为什么默认关掉：它是给演示与排障用的**执行元数据**，不是给终端用户看的。
+#: 把 "硬性阻断 / 二次复核 / 修订预算" 这些内部关卡名摊在一个真实顾客面前，
+#: 既没有意义，也等于把风控结构交底。所以它跟 status 是两回事：
+#:   · status 是**文案**，固定几句，可以放心给用户看（"正在查阅审核资料…"）；
+#:   · node  是**结构**，暴露的是图长什么样。
+#: 用查询参数而不是全局开关，是为了让演示页和生产页共用同一套接口代码。
+EVENT_NODE = "node"
 
 SSE_HEADERS = {
     "Content-Type": "text/event-stream; charset=utf-8",
