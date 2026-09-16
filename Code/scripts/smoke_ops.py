@@ -203,14 +203,21 @@ async def main() -> int:
             # ══════════════ 4 脱敏与权限 ══════════════
             section("4. 脱敏按角色生效 / 权限按角色生效")
             await rt.deps.pg.save_agent_message(session_id=sid, agent_id="x",
-                                                content="用户手机号 13800138000 已核实")
+                                                content="用户手机号 13800138000 已核实，邮箱 demo@zhimei.test")
             r = await client.get(f"/ops/tickets/{tid}", headers=H("service"))
             joined = " ".join(m["content"] for m in r.json()["messages"])
             check("service 角色看到的是脱敏后的手机号",
                   "13800138000" not in joined and "138****8000" in joined, joined[-80:])
+            # ★ 邮箱是后补的：原来 mask() 只处理手机号/身份证/银行卡，
+            #   而注释里写的是"邮箱与手机号同一条规则" —— 注释与实现不一致，
+            #   界面上 service 角色能看到完整邮箱。这类偏差只能靠断言盯住。
+            check("service 角色看到的邮箱也已打码（局部名首字符 + 域名保留）",
+                  "demo@zhimei.test" not in joined and "d***@zhimei.test" in joined,
+                  joined[-120:])
             r = await client.get(f"/ops/tickets/{tid}", headers=H("doctor"))
             joined = " ".join(m["content"] for m in r.json()["messages"])
-            check("doctor 角色可看到原文", "13800138000" in joined)
+            check("doctor 角色可看到原文",
+                  "13800138000" in joined and "demo@zhimei.test" in joined, joined[-80:])
 
             r = await client.post(f"/ops/tickets/{tid}/reply", headers=H("compliance"),
                                   json={"text": "合规角色不该能回复"})
