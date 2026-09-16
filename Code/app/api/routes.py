@@ -251,14 +251,17 @@ def _takeover_notice(info: dict) -> tuple[str, bool, str | None]:
     ★ 文案**必须**区分"已接单"和"还在排队"。项目里有一条硬约束：
       没接单就不能告诉用户"人工已接入" —— 说了等于替一个还没接手的人承诺。
       这里同样：排队时只能说"已转达/排队中"。
+
+    ★ 也**不把坐席的 id 写进给顾客看的话里**。第一版写的是
+      "已转达正在为您服务的客服（agent-service）" —— `agent-service`
+      是内部的工号，对顾客毫无意义，还会让人以为在跟一个机器人对话。
+      真要显示就显示姓名，拿不到姓名就不显示。
     """
     ticket = info.get("ticket") or {}
     accepted = bool(ticket.get("accepted_at"))
-    agent_name = (ticket.get("assigned_to") or None) if accepted else None
     if accepted:
-        who = f"（{agent_name}）" if agent_name else ""
-        return (f"已收到，并已转达正在为您服务的客服{who}。AI 已暂停自动回复，"
-                f"客服会在这里继续回复您。"), True, agent_name
+        return ("已收到，并已转达正在为您服务的客服。AI 已暂停自动回复，"
+                "客服会在这里继续回复您。"), True, None
     return ("已收到，并已排队转给人工客服。AI 已暂停自动回复；"
             "客服接单后会看到您刚才补充的内容。"), False, None
 
@@ -346,6 +349,18 @@ async def _takeover_source(rt: Runtime, session_id: str, text: str, info: dict,
     if note:
         notice = note
 
+    # ★ 回执只在**接管开始后的第一条**弹给用户看。
+    #   接管期间顾客常常连着补充好几句（"还有点发烧"→"现在又吐了"），
+    #   每句都插一个"已收到，并已转达…"的气泡会变成刷屏 ——
+    #   用户会以为系统在报错，真正重要的那句话反而被淹掉。
+    #   之后只用状态栏提示一行（quiet=True），消息照常落库转给坐席。
+    try:
+        already = await rt.deps.pg.count_takeover_messages(session_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("查接管回执次数失败（session=%s）", session_id)
+        already = 0            # 查不出来就当作第一次（宁可多说一句，也不要漏说）
+    quiet = already > 0
+
     turn_id = str(uuid.uuid4())
     try:
         await rt.deps.pg.save_message(
@@ -358,9 +373,11 @@ async def _takeover_source(rt: Runtime, session_id: str, text: str, info: dict,
         logger.exception("接管期间用户消息落库失败（session=%s）", session_id)
         notice = ("已收到您的消息，但系统暂时没能把它转给客服，"
                   "麻烦您稍后再发一次，或直接等待客服回复。")
+        quiet = False          # 这种情况必须弹出来，不能只留在状态栏
 
     yield sse(*takeover_event(notice, ticket_id=ticket_id,
-                              accepted=accepted, agent_name=agent_name))
+                              accepted=accepted, agent_name=agent_name,
+                              quiet=quiet))
     yield sse(EVENT_DONE, {"session_id": session_id, "turn_id": turn_id})
 
 

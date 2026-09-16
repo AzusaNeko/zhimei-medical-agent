@@ -56,8 +56,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         页面默认带 ?trace=1 请求节点执行轨迹 —— 那是给**演示与排障**用的。
         真实线上要对顾客隐藏，前端把「显示执行轨迹」勾掉即可
         （后端默认就是不发 node 事件的，见 events.EVENT_NODE）。
+
+        ★ `Cache-Control: no-store` 是必须的，不是可选的。
+          这两个单文件页面是**边改边用**的：没有这个头，浏览器会按启发式规则
+          缓存住旧版本 —— 于是改了前端、刷新页面却还是老行为，
+          排查方向会被带偏到"是不是没生效/是不是后端没重启"。
+          实测踩到过：修好了一个前端 bug，用户刷新后说"还是老样子"。
         """
-        return HTMLResponse((_WEB_DIR / "chat.html").read_text(encoding="utf-8"))
+        return HTMLResponse((_WEB_DIR / "chat.html").read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-store, must-revalidate"})
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:

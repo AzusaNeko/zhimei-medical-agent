@@ -178,6 +178,12 @@ class FakePg:
             "human_request_count": 0,
         })
 
+    async def count_takeover_messages(self, session_id: str) -> int:
+        """与 PgStore 同形：数接管期间顾客发的消息条数。"""
+        return sum(1 for m in self.messages
+                   if m.get("session_id") == session_id
+                   and str((m.get("meta") or {}).get("human_takeover")).lower() == "true")
+
     async def bump_human_request(self, session_id: str) -> int:
         """与 PgStore 同形：+1 并返回累加后的值。"""
         sess = await self.get_session(session_id)

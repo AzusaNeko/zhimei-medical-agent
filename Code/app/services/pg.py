@@ -138,6 +138,22 @@ class PgStore:
             _uuid(session_id), limit)
         return [dict(r) for r in reversed(rows)]
 
+    async def count_takeover_messages(self, session_id: str) -> int:
+        """这个会话里已经有多少条"接管期间顾客说的话"。
+
+        ★ 用途：接管回执（"已转达客服"）只在**接管开始后的第一条**弹给用户看，
+          之后每发一条都弹一次会变成刷屏 —— 用户会以为出了什么问题。
+          之后只走状态栏一行提示。
+
+        ★ 用 meta 里的标记来数，而不是另开一张表：这条信息本来就属于
+          "这条消息是什么类型的"，和 `review_kind` 是同一层语义。
+        """
+        row = await self._fetchrow(
+            "SELECT count(*) AS n FROM app.chat_message "
+            "WHERE session_id = $1 AND meta->>'human_takeover' = 'true'",
+            _uuid(session_id))
+        return int(row["n"]) if row else 0
+
     async def list_sessions(self, *, limit: int = 30,
                             channel: str | None = None,
                             user_id: str | None = None) -> list[dict]:

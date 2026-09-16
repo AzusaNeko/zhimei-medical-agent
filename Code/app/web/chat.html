@@ -142,20 +142,35 @@ button:disabled{opacity:.45;cursor:not-allowed}
          color:var(--muted);border-bottom:1px solid #eef2f5}
 .glegend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;
            vertical-align:middle}
+/* "本次经过"摘要：单独占一块，说明这一次走了哪条路、进了哪几个子图 */
+.gsummary{padding:8px 14px;border-bottom:1px solid #eef2f5;background:#fcfdfe}
+.gsum-title{font-size:11.5px;color:var(--muted);margin-bottom:5px}
+.gsum-row{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:4px}
+.gchip{font-size:11px;padding:2px 7px;border-radius:10px;background:#f0f3f6;color:#8b98a3;
+       border:1px solid #e3e9ee}
+.gchip.on{background:#e9f4f0;color:#1a5044;border-color:#bcdccf;font-weight:600}
+.gchip.sub.on{background:#eef4f9;color:#17405f;border-color:#c3d6e6}
+.gsum-note{font-size:11px;color:var(--muted)}
+/* 架构图里的"层"：一层一个浅色底 + 标题，这是它区别于"节点云"的关键 */
+.glayer rect{fill:#f7f9fb;stroke:#e6ecf1;stroke-width:1}
+.glayer.touched rect{fill:#f2f8f6;stroke:#cfe3da}
+.glayer-title{font:11px "Microsoft YaHei",system-ui,sans-serif;fill:#7b8b96}
+.glayer.touched .glayer-title{fill:#2f6b58;font-weight:600}
+.gedge-label{font:9.5px "Microsoft YaHei",system-ui,sans-serif;fill:#a8b4bd;
+             text-anchor:middle}
 .gwrap{flex:1;overflow:auto;background:#fbfcfd;padding:8px}
 #gSvg{display:block}
 /* 工作流图里的节点：三种状态（未走 / 走过 / 正在走） */
-.gnode rect{fill:#fff;stroke:#cfd8de;stroke-width:1.2;rx:6}
+.gnode rect,.gnode polygon{fill:#fff;stroke:#cfd8de;stroke-width:1.2}
 .gnode text{font:11px "Microsoft YaHei",system-ui,sans-serif;fill:var(--muted);
             pointer-events:none}
-.gnode.visited rect{stroke-width:1.8}
+.gnode.visited rect,.gnode.visited polygon{stroke-width:1.8}
 .gnode.visited text{fill:var(--ink);font-weight:600}
-.gnode.g-main.visited rect{fill:#eef4f9;stroke:var(--g-main)}
+.gnode.g-main.visited rect,.gnode.g-main.visited polygon{fill:#eef4f9;stroke:var(--g-main)}
 .gnode.g-kb.visited rect{fill:#e9f4f0;stroke:var(--g-kb)}
 .gnode.g-risk.visited rect{fill:#fbeeeb;stroke:var(--g-risk)}
-.gnode.active rect{stroke-width:2.6;filter:drop-shadow(0 0 4px rgba(23,64,95,.35))}
+.gnode.decision rect,.gnode.decision polygon{fill:#fcfdff}
 .gnode{cursor:pointer}
-.gnode .dur{font:10px Consolas,monospace;fill:#8a5a1e}
 .gedge{stroke:#dde5ea;stroke-width:1.2;fill:none;marker-end:url(#arrow)}
 .gedge.conditional{stroke-dasharray:4 3}
 .gedge.subgraph{stroke:#b9c9d6;stroke-dasharray:2 3}
@@ -324,7 +339,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <h2>Agent 执行轨迹 <span class="sub" id="traceMeta">等待提问</span></h2>
     <div class="tabs">
       <button class="tab active" id="tabTrace">执行轨迹</button>
-      <button class="tab" id="tabGraph">工作流图</button>
+      <button class="tab" id="tabGraph">工作流架构</button>
     </div>
 
     <div id="paneTrace">
@@ -346,7 +361,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
     </div>
     </div><!-- /paneTrace -->
 
-    <!-- ══════ 工作流图：按真实执行轨迹高亮 ══════ -->
+    <!-- ══════ 工作流架构：按 langgraph-main.mmd 的分层绘制 ══════ -->
     <div id="paneGraph" hidden>
       <div class="gbar">
         <button id="gFit">适应宽度</button>
@@ -354,15 +369,19 @@ button:disabled{opacity:.45;cursor:not-allowed}
         <button id="gZoomOut">缩小</button>
         <button id="gClear">清空高亮</button>
       </div>
-      <div class="glegend" id="gLegend"></div>
+      <!-- "本次对话经过了哪些层 / 哪些子图" —— 单独一块，切到哪栏都看得到 -->
+      <div class="gsummary" id="gSummary"></div>
       <div class="gwrap" id="gWrap">
         <svg id="gSvg" xmlns="http://www.w3.org/2000/svg"></svg>
       </div>
       <div class="hint" id="gHint">
-        这张图是<b>从编译好的图里直接导出</b>的（不是手写的），所以不会和真实流程漂移。<br>
-        提问后，实际走过的节点会<b>依次点亮</b>，走过的边会有流动效果 ——
-        绿=主图、青=科普子图、红=风险审查子图。<br>
-        <b style="color:#8a5a1e">点节点</b>可以看它这一步的耗时与是否调用了大模型。
+        这是按 <b>Workflow/langgraph-main.mmd</b> 那张设计图画的分层架构：
+        入口与调度 → 七路草稿 → 必经关卡 → 修订回路 → 输出与执行 → 出口层。
+        菱形是路由点，黄色小点表示这一步会调用大模型。<br>
+        提问后走过的节点会依次点亮、走过的连线会流动 ——
+        <b>上方摘要</b>直接告诉你这一次进了哪几个子图。<br>
+        <b style="color:#8a5a1e">架构与代码的一致性由后端交叉校验</b>：
+        万一有人加了节点却没更新设计图，这里会直接标出来。
       </div>
     </div>
   </aside>
@@ -884,6 +903,7 @@ function addMsg(kind, text, meta) {
 */
 const TYPE_MS = 900;          // 整段正文的目标呈现时长
 const TYPE_MIN_CHUNK = 2;     // 每次至少吐几个字（太碎会像卡顿）
+const TYPE_MIN_LEN = 24;      // 短文本不值得做动画（还没开始就结束了）
 
 function prefersReducedMotion() {
   try {
@@ -892,11 +912,18 @@ function prefersReducedMotion() {
   } catch (e) { return false; }
 }
 
+/** 这段文本会不会走打字机呈现。
+ *  单独抽出来是为了让"角标文案"和"实际行为"用同一个判断 ——
+ *  两处各写一遍的话，短文本会标着"逐字呈现"却整段出现。 */
+function typingEligible(text) {
+  return String(text || "").length >= TYPE_MIN_LEN && !prefersReducedMotion();
+}
+
 /** 追加一条"打字机"呈现的正文消息。返回节点。 */
 function addMsgTyped(kind, text, meta) {
   const full = String(text || "");
   // 短文本、或系统要求减少动效 → 不做动画，直接整段（动画是锦上添花，不该添乱）
-  if (full.length < 24 || prefersReducedMotion()) return addMsg(kind, full, meta);
+  if (!typingEligible(full)) return addMsg(kind, full, meta);
 
   const m = el("div", "msg " + kind);
   const node = document.createTextNode("");
@@ -975,50 +1002,42 @@ let graphVisited = {};    // 节点 id → {seq, ms, llm}
 let graphLastNode = null; // 上一个执行过的节点（用来点亮走过的那条边）
 let graphView = {x: 0, y: 0, k: 1};
 
-const GNODE_W = 132, GNODE_H = 30, GAP_X = 46, GAP_Y = 12;
-
 /** 分层：层号 = 从"没有入边"的节点出发的最长路径。 */
+//: 架构画布上的尺寸常量。TB 布局（自上而下），和 `langgraph-main.mmd` 的阅读顺序一致。
+const GNODE_W = 118, GNODE_H = 30, GNODE_GAP = 12;
+const LAYER_H = 92, LAYER_PAD = 34;      // 层高 / 层标题占位
+
+/** 按**架构**布局：一层一行，自上而下。
+ *
+ *  ★ 与上一版的区别：上一版是把 55 个节点按最长路径铺开（DAG 自动布局），
+ *    画出来是一张"节点云"—— 能看出连线，但看不出**设计意图**
+ *    （哪一层是入口、哪一层是七路并行、子图挂在哪儿）。
+ *    现在直接照 `Workflow/langgraph-main.mmd` 的分层来摆：
+ *      入口与调度 → 七路草稿 → 必经关卡 → 修订回路 → 输出与执行 → 出口层。
+ *    设计图是人画的，所以这里也由人（后端 ARCHITECTURE）写死分层 ——
+ *    机器推导不出"这是第几层"。**但节点有没有漏，由后端交叉校验兜住**
+ *    （见 graph_topology.validate，check_ui 会断言它为空）。
+ */
 function graphLayout() {
-  const nodes = graphData.nodes;
-  const outs = {}, indeg = {};
-  nodes.forEach((n) => { outs[n.id] = []; indeg[n.id] = 0; });
-  graphData.edges.forEach((e) => {
-    if (outs[e.source] && outs[e.source].indexOf(e.target) < 0) {
-      outs[e.source].push(e.target);
-      indeg[e.target] = (indeg[e.target] || 0) + 1;
-    }
-  });
-  const layer = {};
-  nodes.forEach((n) => { layer[n.id] = 0; });
-  // 最多迭代节点数次：既算出最长路径，也天然避免了环导致的死循环
-  for (let it = 0; it < nodes.length; it++) {
-    let moved = false;
-    for (const e of graphData.edges) {
-      if (!(e.source in layer) || !(e.target in layer)) continue;
-      if (layer[e.target] < layer[e.source] + 1) {
-        layer[e.target] = layer[e.source] + 1;
-        moved = true;
-      }
-    }
-    if (!moved) break;
-  }
-  const cols = {};
-  const order = {main: 0, kb: 1, risk: 2};
-  nodes.forEach((n) => {
-    const L = layer[n.id] || 0;
-    (cols[L] = cols[L] || []).push(n);
-  });
   graphPos = {};
-  Object.keys(cols).forEach((L) => {
-    // 同一层内按分组排一下，让子图的节点聚在一起，读起来不至于跳来跳去
-    cols[L].sort((a, b) => (order[a.group] - order[b.group]) || a.id.localeCompare(b.id));
-    cols[L].forEach((n, i) => {
-      graphPos[n.id] = {x: 16 + L * (GNODE_W + GAP_X), y: 16 + i * (GNODE_H + GAP_Y)};
+  const arch = graphData.architecture;
+  let y = LAYER_PAD;
+  let maxX = 0;
+  graphData._layers = [];
+  for (const layer of arch.layers) {
+    const n = layer.nodes.length;
+    const rowW = n * GNODE_W + (n - 1) * GNODE_GAP;
+    // 居中：整行宽度按最宽的一层对齐（L1 七路最宽）
+    const startX = 16;
+    const top = y + 22;                       // 让开层标题
+    layer.nodes.forEach((id, i) => {
+      graphPos[id] = {x: startX + i * (GNODE_W + GNODE_GAP), y: top};
     });
-  });
-  const maxX = Math.max(...Object.values(graphPos).map((p) => p.x)) + GNODE_W + 16;
-  const maxY = Math.max(...Object.values(graphPos).map((p) => p.y)) + GNODE_H + 16;
-  graphData._size = {w: maxX, h: maxY};
+    maxX = Math.max(maxX, startX + rowW);
+    graphData._layers.push({...layer, y: y, top: top, width: rowW});
+    y = top + GNODE_H + LAYER_H - GNODE_H;    // 下一层的标题位置
+  }
+  graphData._size = {w: maxX + 32, h: y + 40};
 }
 
 function graphEl(tag, attrs) {
@@ -1036,6 +1055,9 @@ function graphDraw() {
   svg.setAttribute("width", Math.round(w / graphView.k));
   svg.setAttribute("height", Math.round(h / graphView.k));
 
+  const arch = graphData.architecture;
+  const decisions = new Set(arch.decisions);
+
   const defs = graphEl("defs", {});
   const marker = graphEl("marker", {id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5",
                                     markerWidth: "6", markerHeight: "6", orient: "auto"});
@@ -1043,64 +1065,137 @@ function graphDraw() {
   defs.appendChild(marker);
   svg.appendChild(defs);
 
-  // 先画边（压在节点下面）
-  for (const e of graphData.edges) {
-    const a = graphPos[e.source], b = graphPos[e.target];
+  // ── 层的背景与标题（这是"架构"读得懂的关键：一眼看出有哪几层）──
+  for (const layer of graphData._layers) {
+    const done = layer.nodes.filter((n) => graphVisited[n]).length;
+    const bg = graphEl("g", {class: "glayer" + (done ? " touched" : "")});
+    bg.appendChild(graphEl("rect", {x: 8, y: layer.y, width: layer.width + 16,
+                                    height: GNODE_H + LAYER_H - 12, rx: 8}));
+    const t = graphEl("text", {x: 18, y: layer.y + 16, class: "glayer-title"});
+    t.textContent = `${layer.title}　·　${layer.hint}`
+      + (done ? `　［本次走过 ${done} 个节点］` : "");
+    bg.appendChild(t);
+    svg.appendChild(bg);
+  }
+
+  // ── 先画边（压在节点下面）──
+  for (const [src, dst, label] of arch.edges) {
+    const a = graphPos[src], b = graphPos[dst];
     if (!a || !b) continue;
-    const x1 = a.x + GNODE_W, y1 = a.y + GNODE_H / 2;
-    const x2 = b.x, y2 = b.y + GNODE_H / 2;
-    // 折线：先横后竖再横，比贝塞尔更容易看清"从哪一层到哪一层"
-    const mid = x1 + Math.max(12, (x2 - x1) / 2);
-    const d = `M${x1},${y1} L${mid},${y1} L${mid},${y2} L${x2},${y2}`;
-    const cls = "gedge " + e.kind
-      + (graphVisited[e.source] && graphVisited[e.target] ? " flowed" : "");
+    const x1 = a.x + GNODE_W / 2, y1 = a.y + GNODE_H;
+    const x2 = b.x + GNODE_W / 2, y2 = b.y;
+    // 竖直方向用三次贝塞尔：往回走的边（revise → aggregate）也能看出方向
+    const dy = Math.max(18, Math.abs(y2 - y1) / 2);
+    const d = `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+    const cls = "gedge" + (graphVisited[src] && graphVisited[dst] ? " flowed" : "");
     const p = graphEl("path", {d, class: cls});
-    p.dataset.from = e.source;
-    p.dataset.to = e.target;
+    p.dataset.from = src;
+    p.dataset.to = dst;
     svg.appendChild(p);
-  }
-  // 再画节点
-  for (const n of graphData.nodes) {
-    const p = graphPos[n.id];
-    if (!p) continue;
-    const meta = NODES[n.id] || {n: n.id, llm: 0, d: "（未登记的节点）"};
-    const g = graphEl("g", {class: `gnode g-${n.group}` + (graphVisited[n.id] ? " visited" : ""),
-                            transform: `translate(${p.x},${p.y})`});
-    g.appendChild(graphEl("rect", {width: GNODE_W, height: GNODE_H, rx: 6}));
-    const t = graphEl("text", {x: 8, y: 19});
-    t.textContent = (meta.n || n.id).slice(0, 12);
-    g.appendChild(t);
-    if (meta.llm) {
-      const dot = graphEl("circle", {cx: GNODE_W - 9, cy: 9, r: 3, fill: "#e0a94a"});
-      dot.appendChild(graphEl("title", {})).textContent = "会调用大模型（烧 token）";
-      g.appendChild(dot);
+    if (label) {
+      const lt = graphEl("text", {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2,
+                                  class: "gedge-label"});
+      lt.textContent = label;
+      svg.appendChild(lt);
     }
-    if (graphVisited[n.id]) {
-      const dt = graphEl("text", {x: GNODE_W - 8, y: 19, "text-anchor": "end", class: "dur"});
-      dt.textContent = (graphVisited[n.id].ms || 0) + "ms";
-      g.appendChild(dt);
+  }
+
+  // ── 再画节点 ──
+  for (const layer of arch.layers) {
+    for (const id of layer.nodes) {
+      const p = graphPos[id];
+      if (!p) continue;
+      const meta = NODES[id] || {n: id, llm: 0, d: "（未登记的节点）", g: "main"};
+      const g = graphEl("g", {class: `gnode g-${meta.g}` + (graphVisited[id] ? " visited" : "")
+                                     + (decisions.has(id) ? " decision" : ""),
+                              transform: `translate(${p.x},${p.y})`});
+      if (decisions.has(id)) {
+        // 菱形：路由点（和 .mmd 里的 { } 节点对应）
+        const pad = 9;
+        g.appendChild(graphEl("polygon", {
+          points: `${GNODE_W / 2},0 ${GNODE_W},${GNODE_H / 2} ${GNODE_W / 2},${GNODE_H} 0,${GNODE_H / 2}`}));
+        const t = graphEl("text", {x: GNODE_W / 2, y: 19, "text-anchor": "middle"});
+        t.textContent = (meta.n || id).slice(0, 9);
+        g.appendChild(t);
+        void pad;
+      } else {
+        g.appendChild(graphEl("rect", {width: GNODE_W, height: GNODE_H, rx: 6}));
+        const t = graphEl("text", {x: 8, y: 19});
+        t.textContent = (meta.n || id).slice(0, 11);
+        g.appendChild(t);
+      }
+      if (meta.llm) {
+        const dot = graphEl("circle", {cx: GNODE_W - 9, cy: 9, r: 3, fill: "#e0a94a"});
+        dot.appendChild(graphEl("title", {})).textContent = "会调用大模型（烧 token）";
+        g.appendChild(dot);
+      }
       const title = graphEl("title", {});
-      title.textContent = `${meta.n}（${n.id}）\n第 ${graphVisited[n.id].seq} 个执行`
-        + `${meta.llm ? " · 调用大模型" : ""}\n用时 ${graphVisited[n.id].ms}ms\n${meta.d}`;
+      title.textContent = `${meta.n || id}（${id}）`
+        + (graphVisited[id]
+            ? `\n第 ${graphVisited[id].seq} 个执行 · 用时 ${graphVisited[id].ms}ms`
+            : "\n本次没有走到")
+        + `${meta.llm ? " · 调用大模型" : ""}\n${meta.d}`;
       g.appendChild(title);
+      svg.appendChild(g);
     }
-    svg.appendChild(g);
   }
-  $("gLegend").innerHTML = Object.keys(graphData.groups)
-    .map((k) => `<span><i style="background:${graphData.groups[k].color}"></i>`
-                + `${graphData.groups[k].label}</span>`).join("");
+  graphSummary();
 }
 
-/** 把一个节点标成"走过了"，并点亮走到它的那条边。 */
-function graphMark(nodeId, ms) {
+/** "本次对话经过了哪些层 / 哪些子图"。
+ *
+ *  ★ 这是本次改动的重点之一：用户要的不是"一张全图"，而是
+ *    **这一次**走过了哪条路、进了哪几个子图。全图永远长一样，
+ *    只有这份摘要说明"这一次发生了什么"。
+ *    它单独占一块（不塞进执行轨迹里），所以切到哪一栏都能一眼看到。
+ */
+function graphSummary() {
+  const box = $("gSummary");
+  if (!box) return;
   if (!graphData) return;
-  nodeSeq = nodeSeq;   // 两个视图共用序号，这里不需要额外维护
-  graphVisited[nodeId] = {seq: Object.keys(graphVisited).length + 1, ms: ms || 0};
-  const meta = NODES[nodeId] || {};
-  graphVisited[nodeId].llm = !!meta.llm;
+  const arch = graphData.architecture;
+  const ran = (id) => Boolean(graphVisited[id]);
+  const chips = [];
+  for (const layer of arch.layers) {
+    const hit = layer.nodes.filter(ran);
+    const cls = hit.length ? "gchip on" : "gchip";
+    const who = hit.length && layer.id === "L1"
+      ? `（${hit.map((n) => (NODES[n] || {n}).n).join("、")}）` : "";
+    chips.push(`<span class="${cls}">${hit.length ? "✓" : "·"} ${layer.title}${who}</span>`);
+  }
+  const subs = arch.subgraphs.map((s) => {
+    const hit = s.nodes.filter(ran);
+    return `<span class="${hit.length ? "gchip on sub" : "gchip sub"}">`
+      + `${hit.length ? "✓" : "·"} ${s.title}`
+      + (hit.length ? `（${hit.length} 步：${hit.slice(0, 4).map((n) => (NODES[n] || {n}).n).join("、")}${hit.length > 4 ? "…" : ""}）` : "")
+      + `</span>`;
+  }).join("");
+  const total = Object.keys(graphVisited).length;
+  box.innerHTML = `<div class="gsum-title">本次对话经过：</div>`
+    + `<div class="gsum-row">${chips.join("")}</div>`
+    + `<div class="gsum-row">${subs}</div>`
+    + `<div class="gsum-note">共执行 ${total} 个节点`
+    + (graphData.warnings && graphData.warnings.length
+        ? `　<span style="color:#8a2a1e">⚠ ${graphData.warnings.join("；")}</span>`
+        : "　（架构与代码一致）") + `</div>`;
+}
+
+/** 把一个节点标成"走过了"。
+ *
+ *  ★ 这里**先记录、再决定要不要重画**。
+ *    上一版的写法是"没有 graphData 就直接 return" —— 于是"先提问、再切到
+ *    工作流图"这条最自然的顺序下，graphVisited 一直是空的：图上什么都不亮。
+ *    记录与绘制是两件事，只有绘制才依赖拓扑数据。
+ */
+function graphMark(nodeId, ms) {
+  if (!nodeId) return;
+  graphVisited[nodeId] = {
+    seq: Object.keys(graphVisited).length + 1,
+    ms: ms || 0,
+    llm: !!((NODES[nodeId] || {}).llm),
+  };
   graphLastNode = nodeId;
-  if ($("paneGraph").hidden) return;   // 图没显示就先只记状态，切过去时再画
-  graphDraw();
+  if (graphData && !$("paneGraph").hidden) graphDraw();   // 图没显示就先只记状态
 }
 
 function graphReset() {
@@ -1282,10 +1377,20 @@ async function applyPoll(d) {
   const msgs = d.messages || [];
   const taken = (d.session || {}).ai_enabled === false;
 
+  // ★ 接管状态**每次轮询都同步**，而且必须放在所有提前 return 之前。
+  //
+  //   之前它被放在"内容有变化"的分支里，于是只要对话内容没变（绝大多数轮询
+  //   都是这样），提示条就永远不更新 —— 用户看到的是
+  //   "人工早就结束了，界面还挂着 AI 已暂停"，而且怎么刷新都下不去。
+  //
+  //   这里的判据只有服务端的 `ai_enabled` 一个来源，所以它**不可能说谎**，
+  //   也不可能卡住。对话内容的增量更新是另一件事，两者不该互相牵制。
+  syncTakeover(taken, false);
+
   // 没有任何变化就什么都不做（绝大多数轮询都走到这里）
   const sameTail = lastIndex >= 0 && lastIndex < msgs.length &&
                    msgSig(msgs[lastIndex]) === lastSig;
-  if (sameTail && msgs.length === lastIndex + 1 && taken === lastSeenTaken) return;
+  if (sameTail && msgs.length === lastIndex + 1) return;
 
   if (!sameTail) {
     // 和记忆里的位置对不上（换了会话、消息被清、或上一轮没对齐）——
@@ -1296,7 +1401,6 @@ async function applyPoll(d) {
   } else {
     for (const m of msgs.slice(lastIndex + 1)) msgNode(m);
     markSeen(msgs);
-    syncTakeover(taken, false);
     $("messages").scrollTop = $("messages").scrollHeight;
   }
   await loadConversations();   // 会话列表上的"人工接管"角标也要跟着变
@@ -1392,10 +1496,14 @@ function handle(name, d) {
     case "final":
       // ★ 正文用打字机呈现：内容是**整段审后送达**的（见 addMsgTyped 的说明），
       //   这里只是送达之后的显示动画。
+      //
+      // ★ 角标不再写"不流式"。那句话描述的是**传输方式**，而用户看到的是
+      //   **呈现方式** —— 一边逐字往外走、一边标着"不流式"，只会让人以为坏了。
+      //   角标要说的是"这份正文是整段过审之后才发出来的"，那才是它想表达的保证。
       addMsgTyped("bot", d.text || "", [
         {text: "已审正文", cls: "ok"},
         "凭据 " + String(d.token || "").slice(0, 12) + "…",
-        "整段送达（不流式）"
+        typingEligible(d.text) ? "逐字呈现 · 整段过审后送达" : "整段过审后送达",
       ]);
       return true;
     case "awaiting_confirmation": {
@@ -1430,21 +1538,30 @@ function handle(name, d) {
              String(d.ticket_id || "").slice(0, 8) + "… 优先级 " + (d.priority || ""), [
         {text: "转人工", cls: "warn"}, "原因 " + (d.reason || "")
       ]);
-      // ★ 当场就把输入框关掉，不等下一轮轮询。这一刻用户已经被明确告知
-      //   "AI 已停用、马上有人来" —— 界面必须同步，否则他会继续对着
-      //   AI 提问，然后收到 409，体验上像是坏了。
-      //   先置 lastSeenTaken 再 sync，避免轮询又把同一句提示插一遍。
-      lastSeenTaken = takeover;
-      syncTakeover(true, true);
+      // ★ 这里**故意不点亮接管提示条**。
+      //   刚建完工单时 AI 并没有被停用 —— 按设计，AI 要一直答到坐席**接单**
+      //   为止（因为人工可能一时接不上，AI 至少还能帮上忙）。所以此刻挂出
+      //   "AI 已暂停自动回复"是**谎报**：用户会以为 AI 不理他了。
+      //   真实状态由服务端的 `ai_enabled` 决定，轮询每 3 秒同步一次
+      //   （见 applyPoll：那一步现在放在所有提前 return 之前，不会卡住）。
       return true;
     case "human_takeover":
       // ★ 接管期间用户发的话被收下了，但 AI 不回答 —— 必须**明确**告诉他
       //   结果是什么，否则他会以为消息发出去了、在等 AI 回复。
       //   文案由服务端给（它知道坐席有没有接单），前端不自己编。
-      addMsg("sys", d.text || "当前由人工客服接管，AI 已暂停自动回复。", [
-        {text: "人工接管", cls: "warn"},
-        d.accepted ? "客服已接单" : "排队等待客服接单",
-      ]);
+      //
+      // ★ quiet=true：这是接管期间的**后续**消息，只在状态栏提示一行。
+      //   接管时顾客常常连着补充好几句，每条都插一个气泡会变成刷屏，
+      //   真正重要的那句话反而被淹掉。
+      if (d.quiet) {
+        setStatus(d.text || "已转达客服");
+        setTimeout(() => { if (!busy) setStatus(""); }, 3500);
+      } else {
+        addMsg("sys", d.text || "当前由人工客服接管，AI 已暂停自动回复。", [
+          {text: "人工接管", cls: "warn"},
+          d.accepted ? "客服已接单" : "排队等待客服接单",
+        ]);
+      }
       // 顺手把提示条点上（不等下一轮轮询）
       lastSeenTaken = takeover;
       syncTakeover(true, true);

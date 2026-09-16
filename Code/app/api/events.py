@@ -42,16 +42,22 @@ EVENT_TAKEOVER = "human_takeover"
 
 
 def takeover_event(text: str, *, ticket_id: str | None = None, accepted: bool = False,
-                   agent_name: str | None = None, executed: bool = False) -> tuple[str, dict]:
+                   agent_name: str | None = None, executed: bool = False,
+                   quiet: bool = False) -> tuple[str, dict]:
     """接管期间的"已记录、未作答"事件。
 
     `executed` 显式写出来并恒为 False：这段逻辑也可能被"确认执行"走到
     （用户在接管期间点了确认），那时最要紧的一件事就是让客户端**明确知道
     操作没有执行** —— 对客系统里"看起来像成功了"是最坏的失败。
+
+    ★ `quiet=True`：这条只是"又收到一条"，**不要**在对话区再插一个气泡。
+      接管期间顾客可能连着补充好几句话，每条都弹一遍
+      "已收到，并已转达客服…" 会变成刷屏，用户会以为系统在报错。
+      客户端收到 quiet 时只用状态栏提示一行。
     """
     return (EVENT_TAKEOVER, {"text": text, "ticket_id": ticket_id,
                              "accepted": accepted, "agent_name": agent_name,
-                             "executed": executed})
+                             "executed": executed, "quiet": quiet})
 
 
 SSE_HEADERS = {

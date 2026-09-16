@@ -334,7 +334,7 @@ async function bootPage(html, { token, routes, local }) {
     errors.push('同步抛错: ' + e.message);
   }
   await new Promise((r) => setTimeout(r, 60));   // 等启动里的 await 链走完
-  return { els, seen, errors, logged, texts, intervals, routes };
+  return { els, seen, errors, logged, texts, intervals, routes, ctx };
 }
 
 const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
@@ -479,24 +479,32 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
   //    有没有东西。
   console.log('\nH. 工作流执行图');
   const GRAPH_STUB = {
-    nodes: [
-      {id: 'normalize', group: 'main'}, {id: 'classify', group: 'main'},
-      {id: 'dispatch', group: 'main'}, {id: 'k_agent', group: 'main'},
-      {id: 'kb_intake', group: 'kb'}, {id: 'kb_draft', group: 'kb'},
-      {id: 'aggregate', group: 'main'}, {id: 'risk_gate', group: 'main'},
-      {id: 'gate_in', group: 'risk'}, {id: 'send', group: 'main'},
-    ],
-    edges: [
-      {source: 'normalize', target: 'classify', kind: 'normal'},
-      {source: 'classify', target: 'dispatch', kind: 'normal'},
-      {source: 'dispatch', target: 'k_agent', kind: 'conditional'},
-      {source: 'k_agent', target: 'aggregate', kind: 'conditional'},
-      {source: 'aggregate', target: 'risk_gate', kind: 'normal'},
-      {source: 'risk_gate', target: 'send', kind: 'conditional'},
-    ],
-    groups: {main: {label: '主图', color: '#17405f'}, kb: {label: '科普', color: '#1a5044'},
-             risk: {label: '风险', color: '#8a2a1e'}},
-    subgraph_entry: {k_agent: 'kb_intake', risk_gate: 'gate_in'},
+    architecture: {
+      layers: [
+        {id: 'L0', title: '入口与调度层', hint: '标准化 → 意图 → 分派',
+         nodes: ['normalize', 'classify', 'dispatch']},
+        {id: 'L1', title: '草稿产出层 · 七路并行', hint: '只产出草稿',
+         nodes: ['k_agent', 'p_agent']},
+        {id: 'GATE', title: '聚合与必经关卡', hint: '必经', nodes: ['aggregate', 'risk_gate']},
+        {id: 'EXITS', title: '出口层', hint: '持有凭据', nodes: ['send', 'human_handoff']},
+      ],
+      decisions: ['dispatch', 'risk_gate'],
+      subgraphs: [
+        {id: 'kb', title: '知识科普子图', hint: '检索 → 证据', hosts: ['k_agent'],
+         entry: 'kb_intake', nodes: ['kb_intake', 'kb_draft']},
+        {id: 'risk', title: '风险审查子图', hint: '规则 + 面板', hosts: ['risk_gate'],
+         entry: 'gate_in', nodes: ['gate_in', 'issue_token']},
+      ],
+      edges: [['normalize', 'classify', ''], ['classify', 'dispatch', ''],
+              ['dispatch', 'k_agent', '科普咨询'], ['k_agent', 'aggregate', ''],
+              ['aggregate', 'risk_gate', ''], ['risk_gate', 'send', 'pass 通过']],
+      subgraph_edges: {},
+    },
+    graph: {nodes: ['normalize', 'classify', 'dispatch', 'k_agent', 'p_agent', 'aggregate',
+                    'risk_gate', 'send', 'human_handoff', 'kb_intake', 'kb_draft',
+                    'gate_in', 'issue_token'],
+            sub_nodes: {}, sub_edges: {}},
+    warnings: [],
   };
   const chatG = await bootPage(chatHtml, {
     token: TOKEN,
@@ -508,25 +516,88 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
     },
   });
   const tabBtn = chatG.els.get('tabGraph');
-  check('chat.html 有「工作流图」这一栏', Boolean(tabBtn && tabBtn.onclick));
+  check('chat.html 有「工作流架构」这一栏', Boolean(tabBtn && tabBtn.onclick));
   if (tabBtn && tabBtn.onclick) {
-    tabBtn.onclick();                                   // 切过去（会去取拓扑）
+    tabBtn.onclick();                                   // 切过去（会去取架构）
     await new Promise((r) => setTimeout(r, 80));
     const svg = chatG.els.get('gSvg');
     const drawn = svg ? svg.children.length : 0;
-    check('切到工作流图会真的画出来（SVG 里有节点和边）', drawn > 0,
+    check('切到工作流架构会真的画出来（SVG 里有层、节点和边）', drawn > 0,
           `SVG 里还是空的（${drawn} 个子元素）—— 布局或绘制那一步断了`);
-    check('工作流图请求了后端拓扑 /api/graph',
+    check('工作流架构请求了后端数据 /api/graph',
           chatG.seen.some((u) => u.includes('/api/graph')),
-          '没有请求拓扑 —— 图是画不出来的');
-    check('分组图例渲染出来（主图/科普/风险）',
-          String(chatG.els.get('gLegend') && chatG.els.get('gLegend').innerHTML)
-            .includes('主图'),
-          '图例是空的');
+          '没有请求架构数据 —— 图是画不出来的');
+    const summary = String(chatG.els.get('gSummary') && chatG.els.get('gSummary').innerHTML);
+    check('渲染了"本次经过"摘要（哪几层 / 哪几个子图）',
+          summary.includes('本次对话经过') && summary.includes('知识科普子图'),
+          `摘要是：${summary.slice(0, 120)}`);
+    check('架构与代码一致时摘要不报警告',
+          !summary.includes('⚠'), summary.slice(0, 160));
   }
-  check('拓扑接口不在前端写死（必须来自 /api/graph）',
-        !/const\s+GRAPH\s*=|const\s+EDGES\s*=/.test(stripComments(scriptOf(chatHtml))),
-        '前端出现了写死的拓扑常量 —— 那会和真实流程图漂移');
+  check('拓扑/架构不在前端写死（必须来自 /api/graph）',
+        !/const\s+GRAPH\s*=|const\s+EDGES\s*=|const\s+LAYERS\s*=/.test(stripComments(scriptOf(chatHtml))),
+        '前端出现了写死的架构常量 —— 那会和设计图、代码三方漂移');
+
+  // ── I. 接管状态的两条不变量（直接驱动事件处理函数，不是扫文本）──
+  //
+  //  ★ 这两条都是用户报的 bug：
+  //    ① 刚转人工就弹出"AI 已暂停自动回复" —— 可那时 AI 并没有停
+  //       （按设计要等坐席**接单**才停），等于对用户谎报；
+  //    ② 接管结束后提示条下不去 —— 因为"同步提示条"被放在轮询的
+  //       提前 return 之后，只要对话内容没变化它就永远不执行。
+  console.log('\nI. 接管状态（提示条不能说谎、也不能卡住）');
+  const bars = await bootPage(chatHtml, {
+    token: TOKEN,
+    routes: {
+      '/api/health': { profile: 'fake', checkpointer: 'memory' },
+      '/api/auth/me': { user: { display_name: '演示用户' } },
+      '/api/sessions': { sessions: [] },
+      ['/api/sessions/' + SID]: { session: { session_id: SID, ai_enabled: true }, messages: [] },
+    },
+  });
+  const fn = bars.ctx && bars.ctx.handle;
+  // ★ 元素要通过 document 拿：桩是按需创建元素的（页面没碰过的 id 不在表里），
+  //   直接读 els.get() 会拿到 undefined，后面整段断言就**静默跳过**了 ——
+  //   而"静默跳过的检查"比失败的检查更糟：它看起来是绿的。
+  const bar = bars.ctx && bars.ctx.document.getElementById('takeoverBar');
+  const msgBox = bars.ctx && bars.ctx.document.getElementById('messages');
+  const statusEl = bars.ctx && bars.ctx.document.getElementById('statusText');
+  check('chat.html 的事件处理函数与提示条可用（否则后面几条会静默跳过）',
+        typeof fn === 'function' && Boolean(bar) && Boolean(msgBox) && Boolean(statusEl),
+        `handle=${typeof fn} bar=${Boolean(bar)} messages=${Boolean(msgBox)}`);
+  if (typeof fn === 'function' && bar && msgBox && statusEl) {
+    bar.hidden = true;                                   // 先归零
+    fn('handoff', {ticket_id: 'T-1', priority: 'P0', reason: 'emergency',
+                   text: '已为您转接人工客服。'});
+    check('收到 handoff 事件时不点亮提示条（那一刻 AI 还没停）',
+          bar.hidden === true,
+          '提示条亮了 —— 但坐席还没接单，AI 其实仍在作答，这是在谎报');
+
+    // 接管开始后的第一条：要有气泡（用户得知道 AI 停了、消息转给谁）
+    const before1 = msgBox.children.length;
+    fn('human_takeover', {text: '已收到，并已转达正在为您服务的客服。', accepted: true});
+    const after1 = msgBox.children.length;
+    check('接管后第一条回执会插进对话区（必须让用户知道 AI 已暂停）',
+          after1 > before1, `消息数没变（${before1} → ${after1}）`);
+
+    // 之后的每一条：只在状态栏提示，不再插气泡（否则连着补充几句就刷屏了）
+    const before2 = msgBox.children.length;
+    fn('human_takeover', {text: '已转达客服', quiet: true, accepted: true});
+    const after2 = msgBox.children.length;
+    check('接管期间的后续消息不再重复插气泡（quiet 只走状态栏）',
+          after2 === before2, `又多插了 ${after2 - before2} 个气泡`);
+    check('quiet 回执走了状态栏',
+          /已转达客服/.test(String(statusEl.textContent)),
+          `状态栏是：${statusEl.textContent}`);
+
+    check('回执文案里不出现内部坐席工号（agent-xxx）',
+          !/agent-[a-z0-9]/i.test(bars.texts.join(' ')),
+          '把内部工号显示给顾客了');
+  }
+  check('提示条状态只在 applyPoll 的提前 return **之前**同步（否则会卡住）',
+        /syncTakeover\(taken, false\)[\s\S]{0,900}?if \(sameTail/.test(
+          stripComments(scriptOf(chatHtml))),
+        'syncTakeover 又跑到提前 return 后面去了 —— 对话没变化时提示条就永远不更新');
 
   // ── G. 正文的"流式"呈现 ──
   //
@@ -549,6 +620,12 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
   check('后端仍然是"整段 final"，没有改成 token 流',
         !/event: *chunk|EVENT_CHUNK|stream_token/.test(apiEvents),
         'events.py 里出现了分片事件 —— 那意味着未经审查的正文开始出站');
+  check('角标不再写"不流式"（那会让人以为逐字呈现是坏了）',
+        !/整段送达（不流式）/.test(chatJs),
+        '角标还写着"不流式" —— 与用户看到的逐字呈现自相矛盾');
+  check('角标文案与实际行为用同一个判断（短文本不会标成"逐字呈现"）',
+        /typingEligible\(/.test(chatJs) && /typingEligible\(full\)/.test(chatJs),
+        '角标和渲染各写了一套条件 —— 短文本会标着逐字呈现却整段出现');
 
   console.log(`\n${'═'.repeat(56)}`);
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);

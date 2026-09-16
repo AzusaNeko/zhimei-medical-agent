@@ -69,6 +69,45 @@ async def main() -> int:
     await deps.startup()
     graph = build_graph(deps, checkpointer=InMemorySaver())
 
+    # ══════════════ 0 工作流架构与真实图的一致性 ══════════════
+    section("0. 工作流架构 ↔ 真实图（设计图过期了要当场报出来）")
+    # 为什么需要：界面上的「工作流架构」是照 `Workflow/langgraph-main.mmd`
+    # 手写下来的分层设计，机器推导不出"这是第几层"。手写的东西一定会漂移，
+    # 所以这里拿**编译好的图**去交叉校验：
+    #   · 架构里写了、代码里没有 → 设计图过期
+    #   · 代码里有、架构没登记   → 加了节点没更新设计图
+    # 两种情况都必须报出来。没有这道校验，那张图迟早变成
+    # "看着很专业但和代码不符"的装饰品 —— 而画错的架构图比没有图更糟。
+    from app.api.graph_topology import build_topology  # noqa: E402
+
+    class _Rt:      # build_topology 只用到 graph 和 deps 两个属性
+        pass
+
+    _rt = _Rt()
+    _rt.graph, _rt.deps = graph, deps
+    topo = build_topology(_rt)
+    check("架构与代码完全一致（没有漏登记的节点）",
+          not topo["warnings"], "；".join(topo["warnings"]))
+    check("架构确实覆盖到了子图内部节点（不是只画了主图）",
+          any(s["id"] == "kb" and len(s["nodes"]) >= 8 for s in topo["architecture"]["subgraphs"])
+          and any(s["id"] == "risk" and len(s["nodes"]) >= 8
+                  for s in topo["architecture"]["subgraphs"]),
+          str([(s["id"], len(s["nodes"])) for s in topo["architecture"]["subgraphs"]]))
+    _declared = {n for lay in topo["architecture"]["layers"] for n in lay["nodes"]}
+    check("每一层都至少有一个节点（空层说明分层写错了）",
+          all(lay["nodes"] for lay in topo["architecture"]["layers"]),
+          str([(lay["id"], len(lay["nodes"])) for lay in topo["architecture"]["layers"]]))
+    check("路由点（菱形）都登记在 decisions 里、且确实是图里的节点",
+          all(d in topo["graph"]["nodes"] for d in topo["architecture"]["decisions"])
+          and "risk_gate" in topo["architecture"]["decisions"]
+          and "dispatch" in topo["architecture"]["decisions"],
+          str(topo["architecture"]["decisions"]))
+    check("主图连线两端都是已登记的节点（画不出来的边等于没有）",
+          all(src in _declared and dst in _declared
+              for src, dst, _lab in topo["architecture"]["edges"]),
+          str([(s, d) for s, d, _ in topo["architecture"]["edges"]
+               if s not in _declared or d not in _declared]))
+
     # ══════════════ 1 科普链路 + 修订环 ══════════════
     section("1. 售前科普：草稿越界 → 退回修订 → 复审通过")
     s = await turn(graph, deps, "smoke-kb", "热玛吉和超声炮有什么区别")

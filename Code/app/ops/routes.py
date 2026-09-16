@@ -316,9 +316,23 @@ def _sse(event: str, data: dict) -> str:
 
 
 def _queue_row(t: dict) -> dict:
+    """SSE 快照里的工单行。**必须是 REST `/tickets` 那行的子集，且不能漏字段。**
+
+    ★ 这里漏过字段，代价很具体：`msg_count` 没带上，坐席端就永远发现不了
+      "顾客在接管期间又说话了" —— 面板靠它对比变化来刷新详情，
+      拿不到值就直接 return，界面上表现为**顾客发的消息客服那边永远收不到**。
+      而 REST 那条路是带 msg_count 的，所以只在"实时推送"这条路上坏，
+      手动刷新一下又好了 —— 正是那种"看起来能用"的 bug。
+
+    ★ 同理漏了 `is_test`：快照每 3 秒覆盖一次 state.tickets，
+      行上的「测试」徽章会闪一下然后消失。
+
+    结论：这里是两套接口的**交叉点**，加字段时两边都要过一遍。
+    """
     return {k: t.get(k) for k in ("ticket_id", "session_id", "reason", "priority", "status",
                                   "wait_seconds", "sla_seconds", "sla_breached",
-                                  "accepted_at", "assigned_to", "context")}
+                                  "accepted_at", "assigned_to", "context",
+                                  "is_test", "msg_count")}
 
 
 # ════════════════════════════════════════════════════════════════
@@ -328,4 +342,6 @@ def _queue_row(t: dict) -> dict:
 async def panel() -> HTMLResponse:
     if not PANEL_FILE.exists():
         return HTMLResponse("<h1>panel.html 缺失</h1>", status_code=500)
-    return HTMLResponse(PANEL_FILE.read_text(encoding="utf-8"))
+    # 同 /chat：单文件页面边改边用，必须禁掉缓存，否则改了前端刷新还是旧行为
+    return HTMLResponse(PANEL_FILE.read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-store, must-revalidate"})

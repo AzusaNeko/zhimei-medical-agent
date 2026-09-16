@@ -336,11 +336,40 @@ async def main() -> int:
             check("误报计数已记录", (m.get("misreport_pending") or 0) >= 1,
                   json.dumps(m, ensure_ascii=False)[:160])
 
-            events = await collect_sse(client, "/ops/stream?once=true", H(), limit=2)
+            # ★ 带上 include_test=true 才能和 REST 那条路比同一批工单
+            #   （本脚本造的工单是 channel=test，默认不进队列 —— 这是设计行为）。
+            events = await collect_sse(client, "/ops/stream?once=true&include_test=true",
+                                       H(), limit=2)
             check("GET /ops/stream 首帧是 snapshot",
                   bool(events) and events[0][0] == "snapshot", str(events[:1])[:120])
             check("snapshot 带队列与指标",
                   "tickets" in events[0][1] and "metrics" in events[0][1])
+
+            # ★ 两个接口必须给出**同一批字段**。
+            #   这条是踩出来的：SSE 快照的行是 `_queue_row()` 挑字段挑出来的，
+            #   而它漏了 `msg_count` —— 坐席端靠这个值发现"顾客在接管期间又说话了"，
+            #   拿不到就直接 return，界面上表现为**顾客发的消息客服永远收不到**；
+            #   而 REST `/tickets` 那条路是带的，所以手动刷新一下又好了。
+            #   凡是"同一个东西有两套出口"的地方，就得有一条断言盯着它们对齐。
+            rest_rows = {t["ticket_id"]: t
+                         for t in (await client.get("/ops/tickets",
+                                                    params={"include_test": "true"},
+                                                    headers=H())).json()["tickets"]}
+            sse_rows = {t["ticket_id"]: t for t in events[0][1]["tickets"]}
+            shared = set(rest_rows) & set(sse_rows)
+            check("两条路都能看到同一张工单（便于比对字段）", bool(shared),
+                  f"REST {len(rest_rows)} 张 / SSE {len(sse_rows)} 张")
+            if shared:
+                tid_cmp = sorted(shared)[0]
+                missing = set(rest_rows[tid_cmp]) - set(sse_rows[tid_cmp])
+                check("SSE 快照行没有漏字段（漏了就会出现'刷新能看到、推送看不到'）",
+                      not missing, f"漏了：{sorted(missing)}")
+                # 反过来也要看：SSE 多了字段不算错，但值是 None 就说明取错了地方
+                check("msg_count 在两条路上都有值（坐席靠它发现顾客又说话了）",
+                      rest_rows[tid_cmp].get("msg_count") is not None
+                      and sse_rows[tid_cmp].get("msg_count") is not None,
+                      f"REST={rest_rows[tid_cmp].get('msg_count')} "
+                      f"SSE={sse_rows[tid_cmp].get('msg_count')}")
 
             r = await client.get("/ops/panel")
             check("GET /ops/panel 返回监控面板",
