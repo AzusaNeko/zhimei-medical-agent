@@ -71,7 +71,13 @@ def make_intake_nodes(deps: Deps) -> dict[str, Callable]:
         #   后果就是用户上一轮刚讲过"热玛吉和超声炮"，这一轮问"那个怎么样"，
         #   模型完全接不上，只会反问"您说的是哪个项目"—— 用户会感觉它失忆了。
         try:
-            recent_turns = await deps.pg.recent_turns(session_id, limit=6)
+            # ★ limit 是"消息条数"，不是"轮数"：一轮大约 2 条（用户 + 助手）。
+            #   取 10 条 ≈ 最近 5 轮。为什么要比"够用"再多一点：
+            #   回答类节点靠这段历史判断"用户之前说过什么"，
+            #   "我做的是水光"可能在好几轮之前，取太短就等于没有记忆。
+            #   成本可接受：回答类 Prompt 会把助手的长回复截断（见
+            #   render_dialog_history），真正占 token 的只有用户原话。
+            recent_turns = await deps.pg.recent_turns(session_id, limit=10)
         except Exception as exc:  # noqa: BLE001
             # 取历史失败不能阻断对话，但留痕
             recent_turns = []

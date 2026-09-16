@@ -358,11 +358,17 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
         chat.logged.length === 0, chat.logged.join(' | ').slice(0, 160));
   check('chat.html 启动过程没有抛错', chat.errors.length === 0, chat.errors.join(' | '));
 
-  // 人工接管中的会话：输入框必须禁用（不能让用户发出去再收 409）
+  // 人工接管中的会话：★ 输入框必须**保持可用**。
+  //   早期版本在这里禁用输入框（怕用户发出去收到 409），结果很荒唐：
+  //   顾客刚被告知"已为您转接人工客服"，下一句就发不出去了。
+  //   现在的约定是"消息照收、AI 不答"（后端 _takeover_source）。
   const input = chat.els.get('input');
-  check('chat.html 打开"人工接管中"的会话会禁用输入框',
-        input && input.disabled === true,
-        '输入框仍是可用的 —— 用户会发出去然后收到 409');
+  check('chat.html 打开"人工接管中"的会话仍让用户能继续说话',
+        input && input.disabled === false,
+        '输入框被禁用了 —— 用户被告知"马上有人来"之后却说不了话');
+  check('chat.html 接管中会显示提示条（告诉用户 AI 暂停、消息会转给客服）',
+        chat.els.get('takeoverBar') && chat.els.get('takeoverBar').hidden === false,
+        '没有提示条 —— 用户会一直等 AI 回复');
 
   // ── F3 轮询：坐席回复必须能**主动**出现在用户这一侧 ──
   //
@@ -372,7 +378,7 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
   //
   //  这里做的是**行为测试**而不是文本检查：先让"服务端"只有一条用户消息，
   //  启动页面，然后模拟坐席在这期间回复（改掉桩数据 + 把会话置为人工接管），
-  //  手动触发一次轮询定时器，看这条回复有没有被画到界面上、输入框有没有被禁用。
+  //  手动触发一次轮询定时器，看这条回复有没有被画到界面上、提示条有没有点上。
   const w = await bootPage(chatHtml, {
     token: TOKEN,
     local: { 'zhimei.currentSession': SID },
@@ -408,9 +414,12 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
     check('坐席的回复被画到了对话区（无需手动刷新）',
           w.texts.some((t) => t.includes('值班客服小美')),
           '界面上找不到坐席那句话');
-    check('坐席接单后输入框被禁用（不能发出去再收 409）',
-          w.els.get('input') && w.els.get('input').disabled === true,
-          '输入框仍然可用');
+    check('坐席接单后用户仍能继续说话（消息转给坐席，AI 不答）',
+          w.els.get('input') && w.els.get('input').disabled === false,
+          '输入框被禁用了 —— 用户被接管后就说不了话了');
+    check('坐席接单后接管提示条出现',
+          w.els.get('takeoverBar') && w.els.get('takeoverBar').hidden === false,
+          '没有提示条 —— 用户不知道 AI 已暂停');
     check('已经画过的消息不会被重复追加',
           w.texts.filter((t) => t.includes('脸发白还特别疼')).length === 1,
           `用户那句话出现了 ${w.texts.filter((t) => t.includes('脸发白还特别疼')).length} 次`);

@@ -28,6 +28,32 @@ EVENT_ERROR = "error"
 #: 用查询参数而不是全局开关，是为了让演示页和生产页共用同一套接口代码。
 EVENT_NODE = "node"
 
+#: 会话已被人工客服接管（`ai_enabled = false`）时，用户**仍然可以继续说话**：
+#: 消息照常落库、转给坐席，但 **AI 不会作答**。
+#:
+#: ★ 这个事件与 409 `human_takeover` 不是一回事，别混：
+#:   · 早期版本在接管期间直接返回 **409**，把用户挡在门外。后果很荒唐 ——
+#:     顾客刚被告知"已为您转接人工客服"，下一句就发不出去了，只能干等，
+#:     而且他想补充的"我疼得更厉害了"也没人能收到。
+#:   · 现在改成 **200 + 本事件**：记下来、转过去、**不抢话**。
+#:     "AI 不与坐席抢话"这条不变量依然成立 —— 它约束的是 AI 不许自动回复，
+#:     不是用户不许说话。
+EVENT_TAKEOVER = "human_takeover"
+
+
+def takeover_event(text: str, *, ticket_id: str | None = None, accepted: bool = False,
+                   agent_name: str | None = None, executed: bool = False) -> tuple[str, dict]:
+    """接管期间的"已记录、未作答"事件。
+
+    `executed` 显式写出来并恒为 False：这段逻辑也可能被"确认执行"走到
+    （用户在接管期间点了确认），那时最要紧的一件事就是让客户端**明确知道
+    操作没有执行** —— 对客系统里"看起来像成功了"是最坏的失败。
+    """
+    return (EVENT_TAKEOVER, {"text": text, "ticket_id": ticket_id,
+                             "accepted": accepted, "agent_name": agent_name,
+                             "executed": executed})
+
+
 SSE_HEADERS = {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",

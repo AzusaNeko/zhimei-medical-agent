@@ -420,6 +420,13 @@ class FakePg:
                 "credential": "执业医师资格 有效"}
 
     # ══════════════ 运营后台（与 PgStore 保持同一接口，否则自检就没意义）══════════════
+    async def open_ticket_for_session(self, session_id: str) -> dict | None:
+        """与 PgStore 同形：取这个会话**未结束**的最新一张工单。"""
+        live = ("open", "accepted", "in_progress", "escalated")
+        cands = [t for t in self.tickets
+                 if t.get("session_id") == session_id and t.get("status") in live]
+        return cands[-1] if cands else None
+
     async def list_tickets(self, *, statuses: list[str] | None = None,
                            priorities: list[str] | None = None,
                            include_test: bool = False,
@@ -430,7 +437,14 @@ class FakePg:
                 and (include_test or not t.get("is_test"))]
         order = {"P0": 0, "P1": 1, "P2": 2}
         rows.sort(key=lambda t: order.get(t["priority"], 9))
-        return rows[:limit]
+        # msg_count 与 PgStore 的子查询同义：这台会话里有多少条消息。
+        # 坐席台靠它发现"接管期间用户又说话了"。
+        out = []
+        for t in rows[:limit]:
+            sid = t.get("session_id")
+            n = sum(1 for m in self.messages if m.get("session_id") == sid)
+            out.append({**t, "msg_count": n})
+        return out
 
     async def purge_test_tickets(self) -> int:
         """与 PgStore 同形：只删 is_test 的，返回条数。"""

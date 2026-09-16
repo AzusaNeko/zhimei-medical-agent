@@ -22,7 +22,8 @@ from langgraph.graph import END, START, StateGraph
 
 from ..graph.schemas import KbDecomposeOut, KbDraftOut, KbVerifyOut, EvidenceOpinion
 from ..prompts import kb as P
-from ..prompts.system import render_evidence, render_feedback, render_slots
+from ..prompts.system import (HISTORY_RULES, render_dialog_history, render_evidence,
+                              render_feedback, render_slots)
 from ..services import text as T
 from ..services.deps import Deps
 from . import progress
@@ -95,6 +96,8 @@ def build_knowledge_subgraph(deps: Deps):
                 user=P.KB_DECOMPOSE_USER.format(
                     user_input=state.get("user_input", ""),
                     slots=render_slots(state.get("slots")),
+                    history_rules=HISTORY_RULES,
+                    history=render_dialog_history(state.get("recent_turns") or []),
                     review_feedback=render_feedback(state.get("review_feedback") or [])))
             queries = [q.model_dump() for q in out.queries] or _fallback_queries(state)
             missing = list(out.missing)
@@ -209,8 +212,17 @@ def build_knowledge_subgraph(deps: Deps):
 
     # ══════════════ 7 证据不足：缩小回答范围 ══════════════
     async def kb_limit(state: dict) -> dict:
+        # ★ 这里**必须**和 kb_draft 一样拿到 slots 与历史。
+        #   原来它只有 user_input + evidence，于是这条"证据不足"的路径
+        #   （恰恰是真实数据下**最常走**的一条）写出来的回答对用户的情况一无所知：
+        #   实测"我对利多卡因过敏"之后问"做热玛吉要注意什么"，它的回答里
+        #   一个字都没提到过敏 —— 因为那句话根本没进这个 Prompt。
+        #   同一个子图里两个节点拿到的东西不一样，是纯粹的疏漏。
         payload = P.KB_LIMIT_USER.format(
             user_input=state.get("user_input", ""),
+            slots=render_slots(state.get("slots")),
+            history_rules=HISTORY_RULES,
+            history=render_dialog_history(state.get("recent_turns") or []),
             evidence=render_evidence(state.get("kb_evidence") or []),
             missing="、".join(_missing_categories(state)) or "未知")
         try:
@@ -232,6 +244,8 @@ def build_knowledge_subgraph(deps: Deps):
         payload = P.KB_DRAFT_USER.format(
             user_input=state.get("user_input", ""),
             slots=render_slots(state.get("slots")),
+            history_rules=HISTORY_RULES,
+            history=render_dialog_history(state.get("recent_turns") or []),
             review_feedback=render_feedback(state.get("review_feedback") or []),
             evidence=render_evidence(evidence))
         try:

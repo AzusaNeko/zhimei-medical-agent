@@ -409,17 +409,24 @@ class PgStore:
           理由是它们的结构跟真实工单完全一样（同样 P0、同样紧急流程），
           混在一起会直接毁掉演示：坐席打开面板看到几十张，分不清哪张是
           眼前这位顾客的。还要看时传 include_test=True，UI 上是个勾选框。
+
+        ★ `msg_count` 是会话里的消息条数，用来**发现"用户又说话了"**：
+          接管期间用户仍然可以发言（AI 不答，但消息会转给坐席），
+          坐席台得知道什么时候该刷新详情 —— 队列快照 3 秒一帧，
+          带上这个计数就不用为"有没有新消息"再开一个接口。
         """
         rows = await self._fetch(
-            """SELECT ticket_id, session_id, thread_id, user_id, reason, priority, status,
-                      profile_summary, assigned_to, accepted_at, closed_at, close_reason,
-                      created_at, is_test
-               FROM ops.handoff_ticket
-               WHERE ($1::text[] IS NULL OR status = ANY($1))
-                 AND ($2::text[] IS NULL OR priority = ANY($2::text[]))
-                 AND ($4::bool OR is_test = false)
-               ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 ELSE 2 END,
-                        created_at
+            """SELECT t.ticket_id, t.session_id, t.thread_id, t.user_id, t.reason,
+                      t.priority, t.status, t.profile_summary, t.assigned_to,
+                      t.accepted_at, t.closed_at, t.close_reason, t.created_at, t.is_test,
+                      (SELECT count(*) FROM app.chat_message m
+                        WHERE m.session_id = t.session_id) AS msg_count
+               FROM ops.handoff_ticket t
+               WHERE ($1::text[] IS NULL OR t.status = ANY($1))
+                 AND ($2::text[] IS NULL OR t.priority = ANY($2::text[]))
+                 AND ($4::bool OR t.is_test = false)
+               ORDER BY CASE t.priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 ELSE 2 END,
+                        t.created_at
                LIMIT $3""",
             statuses, priorities, limit, include_test)
         return [_row(r) for r in rows]
@@ -446,6 +453,25 @@ class PgStore:
             return int(str(status).split()[-1])
         except (ValueError, IndexError):
             return 0
+
+    async def open_ticket_for_session(self, session_id: str) -> dict | None:
+        """这个会话当前**未结束**的工单（有则返回，没有返回 None）。
+
+        ★ 用途：会话处于人工接管时，用户继续说的话要能告诉他是"已转达"还是
+          "排队中"，这取决于工单是否已被坐席接单（`accepted_at`）。
+          这也是项目里那条硬约束的同一个来源：**没接单就不能说"人工已接入"**。
+
+        ★ 为什么按"未结束"而不是"最新一张"取：同一个会话可能先转过一次人工、
+          关单后 AI 恢复、又转了一次。只看最新一张会把已关单的当成在处理中。
+        """
+        row = await self._fetchrow(
+            """SELECT ticket_id, status, priority, accepted_at, assigned_to, is_test
+               FROM ops.handoff_ticket
+               WHERE session_id = $1
+                 AND status IN ('open', 'accepted', 'in_progress', 'escalated')
+               ORDER BY created_at DESC LIMIT 1""",
+            _uuid(session_id))
+        return _row(row) if row else None
 
     async def get_ticket(self, ticket_id: str) -> dict | None:
         row = await self._fetchrow(

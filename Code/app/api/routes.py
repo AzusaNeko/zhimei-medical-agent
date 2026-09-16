@@ -12,7 +12,13 @@ HTTP 接口层。
   1. **正文不流式** —— 过程用 status 事件流式，正文整段审后通过 final 事件发出
   2. **挂起不是结束** —— interrupt 后本次流以 awaiting_confirmation 收尾，
      用户确认走另一个 HTTP 请求（Command(resume=...)），这样线程不必长期占用
-  3. **人工接管优先** —— 会话被人工接管后（ai_enabled=false）直接 409，不让 AI 抢话
+  3. **人工接管优先** —— 会话被人工接管后（ai_enabled=false）AI 不再自动回复。
+     但**用户仍然可以说话**：消息照常落库并转给坐席，只是 AI 不答
+     （见 `_takeover_source`）。早期版本在这里直接返回 409 把用户挡在门外，
+     结果是顾客刚被告知"已为您转接人工客服"，下一句就发不出去了 ——
+     而他想补充的"我疼得更厉害了"，谁也收不到。
+     唯一仍然拒绝的是 `confirm`：那一步是**不可逆**的（真的去改约），
+     人工已在场时不该由 AI 单方面执行。**消息照收，操作不执行。**
 """
 
 from __future__ import annotations
@@ -37,7 +43,7 @@ from ..services.auth import Principal
 from .security import current_user
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
                      EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch,
-                     node_detail, ping, sse)
+                     node_detail, ping, sse, takeover_event)
 
 logger = logging.getLogger("zhimei.api")
 from .schemas import ChatIn, ConfirmIn, CreateSessionIn, HealthOut, MessageOut, SessionOut
@@ -143,7 +149,14 @@ async def chat_stream(session_id: str, body: ChatIn, request: Request,
                       user: Principal = Depends(current_user)) -> StreamingResponse:
     rt = _rt(request)
     await _own_session(rt, session_id, user.user_id)
-    await _guard(rt, session_id)
+
+    # ★ 人工接管期间：**照样收下这句话**，记下来、转给坐席，但不跑图。
+    #   放在 try_begin 之前 —— 这条路根本不占图的执行名额，没必要抢锁，
+    #   也就不会因为"上一轮还在跑"而把用户的话拒掉（那种场景恰恰最需要收下它）。
+    takeover = await _takeover_info(rt, session_id)
+    if takeover is not None:
+        return _sse_response(_takeover_source(rt, session_id, body.text, takeover))
+
     if not await rt.try_begin(session_id):
         raise HTTPException(status_code=409, detail={"code": "busy",
                                                      "message": "该会话正在处理上一条消息"})
@@ -158,7 +171,30 @@ async def chat_confirm(session_id: str, body: ConfirmIn, request: Request,
                        user: Principal = Depends(current_user)) -> StreamingResponse:
     rt = _rt(request)
     await _own_session(rt, session_id, user.user_id)
-    await _guard(rt, session_id)
+
+    # ★ 接管期间"确认执行"走**记录 + 明确未执行**，而不是 409。
+    #   确认动作本身要让坐席看得见（有人正想执行一个方案），
+    #   但操作绝不能执行；事件里 executed=false 显式写死，客户端不会误判成功。
+    takeover = await _takeover_info(rt, session_id)
+    if takeover is not None:
+        # ★ 接管期间"确认执行"走**记录 + 明确未执行**，而不是拒绝。
+        #   确认动作本身要让坐席看得见（有人正想执行一个方案），
+        #   但操作绝不能执行；事件里 executed=false 显式写死，客户端不会误判成功。
+        #
+        # ★ 为什么消息照收、操作却不执行：
+        #     · 说话是**可逆**的（记下来、转给坐席），把用户挡在门外只会让他在
+        #       被告知"马上有人来"之后再发不出一句话；
+        #     · 确认执行是**不可逆**的（真的去改约），而此刻人工已经介入，
+        #       AI 单方面执行一个坐席看不见上下文的操作，风险明显更大。
+        #   所以两者在这里分道扬镳：**消息照收，操作不执行。**
+        what = "确认执行" if body.confirmed else "取消"
+        return _sse_response(_takeover_source(
+            rt, session_id,
+            f"[系统记录] 用户点了「{what}」，但会话已被人工客服接管，该操作未执行",
+            takeover,
+            note=("您的操作**没有执行**：当前会话已由人工客服接管，"
+                  "为避免重复操作，改约/取消这类操作请交给客服确认。")))
+
     if not await rt.try_begin(session_id):
         raise HTTPException(status_code=409, detail={"code": "busy",
                                                      "message": "该会话正在处理上一条消息"})
@@ -167,14 +203,66 @@ async def chat_confirm(session_id: str, body: ConfirmIn, request: Request,
                                        trace_enabled=trace))
 
 
-async def _guard(rt: Runtime, session_id: str) -> None:
-    """人工接管守卫：会话被坐席接管后，AI 不允许再自动回复。"""
+async def _takeover_info(rt: Runtime, session_id: str) -> dict | None:
+    """会话处于人工接管就返回工单信息，否则 None。"""
     session = await rt.deps.pg.get_session(session_id)
-    if session.get("ai_enabled") is False:
-        raise HTTPException(status_code=409, detail={
-            "code": "human_takeover",
-            "message": "当前会话已由人工客服接管，请由坐席处理",
-        })
+    if session.get("ai_enabled") is not False:
+        return None
+    try:
+        ticket = await rt.deps.pg.open_ticket_for_session(session_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("查未结束工单失败（session=%s）", session_id)
+        ticket = None
+    return {"ticket": ticket or {}, "session": session}
+
+
+def _takeover_notice(info: dict) -> tuple[str, bool, str | None]:
+    """接管期间给用户的回执文案。返回 (文案, 是否已接单, 坐席名)。
+
+    ★ 文案**必须**区分"已接单"和"还在排队"。项目里有一条硬约束：
+      没接单就不能告诉用户"人工已接入" —— 说了等于替一个还没接手的人承诺。
+      这里同样：排队时只能说"已转达/排队中"。
+    """
+    ticket = info.get("ticket") or {}
+    accepted = bool(ticket.get("accepted_at"))
+    agent_name = (ticket.get("assigned_to") or None) if accepted else None
+    if accepted:
+        who = f"（{agent_name}）" if agent_name else ""
+        return (f"已收到，并已转达正在为您服务的客服{who}。AI 已暂停自动回复，"
+                f"客服会在这里继续回复您。"), True, agent_name
+    return ("已收到，并已排队转给人工客服。AI 已暂停自动回复；"
+            "客服接单后会看到您刚才补充的内容。"), False, None
+
+
+async def _takeover_source(rt: Runtime, session_id: str, text: str, info: dict,
+                           *, note: str | None = None) -> AsyncIterator[str]:
+    """接管期间的处理：**记下来、转过去、不抢话**（不跑图、不产生 AI 正文）。
+
+    ★ 为什么不复用 `_event_source`：那条路会去跑图。接管期间跑图就等于
+      AI 又在自动回复了，正好是"AI 不与坐席抢话"要禁止的事。
+      这里只做两件事：落库 + 回一个明确的事件。
+    """
+    notice, accepted, agent_name = _takeover_notice(info)
+    ticket_id = (info.get("ticket") or {}).get("ticket_id")
+    if note:
+        notice = note
+
+    turn_id = str(uuid.uuid4())
+    try:
+        await rt.deps.pg.save_message(
+            session_id=session_id, turn_id=turn_id, role="user",
+            content=T.clean(text or ""),
+            meta={"channel": "api", "human_takeover": True})
+    except Exception:  # noqa: BLE001
+        # 落库失败也必须让用户收到回执 —— 但这是"坐席看不到这句话"的严重问题，
+        # 所以一定要留日志，不能像什么都没发生。
+        logger.exception("接管期间用户消息落库失败（session=%s）", session_id)
+        notice = ("已收到您的消息，但系统暂时没能把它转给客服，"
+                  "麻烦您稍后再发一次，或直接等待客服回复。")
+
+    yield sse(*takeover_event(notice, ticket_id=ticket_id,
+                              accepted=accepted, agent_name=agent_name))
+    yield sse(EVENT_DONE, {"session_id": session_id, "turn_id": turn_id})
 
 
 async def _own_session(rt: Runtime, session_id: str, user_id: str) -> None:

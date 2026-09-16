@@ -89,6 +89,24 @@ async def login_customer(client: httpx.AsyncClient) -> None:
     client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
 
+def parse_sse_text(body: str) -> dict[str, dict]:
+    """把一次性 POST 回来的 SSE 正文解析成 {事件名: 数据}。
+
+    同名事件后者覆盖前者 —— 这里只关心"出现了哪些事件、最后那个长什么样"。
+    """
+    out: dict[str, dict] = {}
+    name = "?"
+    for line in body.splitlines():
+        if line.startswith("event: "):
+            name = line[len("event: "):].strip()
+        elif line.startswith("data: "):
+            try:
+                out[name] = json.loads(line[len("data: "):])
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
 async def collect_sse(client: httpx.AsyncClient, url: str, headers: dict,
                       limit: int = 3) -> list[tuple[str, dict]]:
     """读取 SSE 事件。队列流用 ?once=true 只推一帧，避免无限流把测试挂住。"""
@@ -175,10 +193,27 @@ async def main() -> int:
                   r2.status_code == 409 and r2.json().get("code") == "already_accepted",
                   f"{r2.status_code} {r2.text[:100]}")
 
-            r = await client.post(f"/api/chat/{sid}/stream", json={"text": "在吗"})
-            check("接单后聊天接口 → 409 human_takeover",
-                  r.status_code == 409 and r.json().get("code") == "human_takeover",
-                  f"{r.status_code} {r.text[:100]}")
+            # ★ 接管期间用户**仍然可以说话**：200 + human_takeover 事件，
+            #   消息落库转给坐席，但**没有 final**（AI 不抢话）。
+            #   早期版本这里断言 409 —— 那是把顾客挡在门外：他刚被告知
+            #   "已为您转接人工客服"，下一句就发不出去，而想补充的情况
+            #   （"我疼得更厉害了"）谁也收不到。
+            r = await client.post(f"/api/chat/{sid}/stream", json={"text": "补充：现在还有点发烧"})
+            check("接单后用户仍可发言 → 200（不再 409 挡人）",
+                  r.status_code == 200, f"{r.status_code} {r.text[:100]}")
+            ev = parse_sse_text(r.text)
+            check("回的是 human_takeover 事件（明确告知 AI 已暂停）",
+                  "human_takeover" in ev, str(list(ev)))
+            check("接管期间**没有** final（AI 不抢话）", "final" not in ev, str(list(ev)))
+            check("事件里 accepted=true（坐席确实接了单）",
+                  (ev.get("human_takeover") or {}).get("accepted") is True,
+                  str(ev.get("human_takeover")))
+            # 不给 headers：login_customer 已经把顾客令牌设成默认头
+            r = await client.get(f"/api/sessions/{sid}")
+            msgs = (r.json().get("messages") or [])
+            check("用户补充的话已落库（坐席看得到）",
+                  any("发烧" in (m.get("content") or "") for m in msgs),
+                  str([m.get("content", "")[:20] for m in msgs]))
 
             # ══════════════ 3 坐席回复的规则层校验 ══════════════
             section("3. 坐席回复：硬拦 / 代执行 / 软提示")
@@ -262,10 +297,14 @@ async def main() -> int:
             check("关闭工单 → 200", r.status_code == 200, r.text[:120])
             check("关单后 AI 恢复", r.json().get("ai_enabled") is True)
 
-            # 关单 → AI 立即恢复可用（这条必须在 reopen 之前验，reopen 会把 AI 再关掉）
+            # 关单 → AI 立即恢复可用：这一次要有**真正的 AI 出站**，
+            # 而不只是"HTTP 200"。接管期间用户还能说话，所以"200"本身
+            # 已经不能证明 AI 恢复了 —— 必须看有没有 final。
             r = await client.post(f"/api/chat/{sid}/stream", json={"text": "还有一个问题"})
-            check("关单后聊天接口恢复可用（不再是 human_takeover）",
-                  r.status_code == 200, f"{r.status_code} {r.text[:100]}")
+            check("关单后 AI 恢复：200", r.status_code == 200, f"{r.status_code} {r.text[:100]}")
+            ev = parse_sse_text(r.text)
+            check("关单后这一轮**真的由 AI 作答**（有 final，不再是接管回执）",
+                  "final" in ev and "human_takeover" not in ev, str(list(ev)))
 
             r = await client.post(f"/ops/tickets/{tid}/accept", headers=H())
             check("已关闭工单再接单 → 409 ticket_closed",
@@ -277,11 +316,15 @@ async def main() -> int:
             check("重开后若已接单过 → 409 already_accepted",
                   r.status_code == 409 and r.json().get("code") == "already_accepted",
                   f"{r.status_code} {r.text[:100]}")
-            # reopen 会把 AI 再关掉：重开的工单同样不能让 AI 抢话
+            # reopen 会把 AI 再关掉：重开的工单同样不能让 AI 抢话。
+            # ★ 注意断言的是"没有 final"，不是"409" —— AI 不抢话的含义是
+            #   **不出 AI 正文**，用户的话仍然要收下并转给坐席。
             r = await client.post(f"/api/chat/{sid}/stream", json={"text": "还有问题"})
-            check("重开工单后 AI 重新停用 → 409 human_takeover",
-                  r.status_code == 409 and r.json().get("code") == "human_takeover",
+            check("重开工单后 AI 重新停用：返回接管回执",
+                  r.status_code == 200 and "human_takeover" in parse_sse_text(r.text),
                   f"{r.status_code} {r.text[:100]}")
+            check("重开后 AI 不再作答（没有 final）",
+                  "final" not in parse_sse_text(r.text), r.text[:160])
 
             # ══════════════ 6 指标与实时流 ══════════════
             section("6. 指标看板与队列实时流")

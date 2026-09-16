@@ -11,7 +11,8 @@ from typing import Callable
 
 from ...prompts import emergency as EM
 from ...prompts import understand as PU
-from ...prompts.system import render_recent_turns, render_slots
+from ...prompts.system import (HISTORY_RULES, render_dialog_history, render_recent_turns,
+                               render_slots)
 from ...services import text as T
 from ...services.deps import Deps
 from ..schemas import ClarifyOut, SpecialistDraftOut
@@ -29,6 +30,9 @@ SPECIALIST_SYSTEM = """
 
 SPECIALIST_USER = """用户问题：{user_input}
 已知槽位：{slots}
+{history_rules}
+{history}
+
 业务查询结果：
 {biz}
 
@@ -66,6 +70,10 @@ def make_specialist_nodes(deps: Deps) -> dict[str, Callable]:
         payload = SPECIALIST_USER.format(
             user_input=state.get("user_input", ""),
             slots=render_slots(state.get("slots")),
+            # ★ 历史必须传进来：没有它，本 Agent 只知道"这一句话 + 槽位"，
+            #   用户上一轮讲过的事（没有对应槽位的那种）在写答案时完全看不见。
+            history_rules=HISTORY_RULES,
+            history=render_dialog_history(state.get("recent_turns") or []),
             biz=T.clean(str(biz))[:1500],
             review_feedback="；".join(state.get("review_feedback") or []) or "（无）",
         )

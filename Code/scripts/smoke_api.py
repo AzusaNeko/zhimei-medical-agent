@@ -194,10 +194,18 @@ async def main() -> int:
             sid6 = (await client.post("/api/sessions", json={})).json()["session_id"]
             session = await rt.deps.pg.get_session(sid6)
             session["ai_enabled"] = False     # 模拟坐席已接管
-            r = await client.post(f"/api/chat/{sid6}/stream", json={"text": "在吗"})
-            check("人工接管后 → 409 human_takeover",
-                  r.status_code == 409 and r.json().get("code") == "human_takeover",
-                  f"{r.status_code} {r.text[:80]}")
+            r = await client.post(f"/api/chat/{sid6}/stream", json={"text": "补充一句"})
+            # ★ 接管期间**收下**用户的话（200），但不产生 AI 正文。
+            #   断言的是"没有 final"，而不是状态码 —— 见 _takeover_source 的说明。
+            check("人工接管后用户仍可发言 → 200",
+                  r.status_code == 200, f"{r.status_code} {r.text[:80]}")
+            check("人工接管后回 human_takeover 事件且没有 final",
+                  "human_takeover" in r.text and "event: final" not in r.text,
+                  r.text[:160])
+            check("接管期间用户的话仍然落库（转给坐席）",
+                  any("补充一句" in (m.get("content") or "")
+                      for m in await rt.deps.pg.recent_turns(sid6, limit=10)),
+                  "消息没落库 —— 坐席将看不到顾客补充的内容")
 
             r = await client.post(f"/api/chat/{sid}/stream", json={"text": ""})
             check("空文本 → 422 invalid_request",

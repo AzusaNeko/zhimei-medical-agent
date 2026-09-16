@@ -19,6 +19,9 @@ KB_DECOMPOSE_SYSTEM = BASE_RULES + """
 
 KB_DECOMPOSE_USER = """用户问题：{user_input}
 已知槽位：{slots}
+{history_rules}
+{history}
+
 最近审查意见（如有，本轮修订要一并覆盖）：{review_feedback}
 
 输出 JSON：
@@ -46,6 +49,9 @@ KB_DRAFT_SYSTEM = BASE_RULES + """
 
 KB_DRAFT_USER = """用户问题：{user_input}
 已知槽位：{slots}
+{history_rules}
+{history}
+
 上一轮审查意见（如有，必须逐条落实）：{review_feedback}
 
 <evidence>
@@ -74,6 +80,10 @@ KB_LIMIT_SYSTEM = BASE_RULES + """
 """
 
 KB_LIMIT_USER = """用户问题：{user_input}
+已知槽位：{slots}
+{history_rules}
+{history}
+
 <evidence>
 {evidence}
 </evidence>
@@ -85,6 +95,17 @@ KB_LIMIT_USER = """用户问题：{user_input}
 
 
 # ══════════════ 事实与引用核对 ══════════════
+#
+# ★★ 这个 Prompt **刻意不注入对话历史**，与上面三个 Prompt 相反。
+#
+#    它的唯一职责是判断"这句话能不能被它标注的那条 evidence 支撑"。
+#    一旦把对话历史喂进来，模型就有了一个**更省事的依据来源**：
+#    它会开始拿"用户说过 / 助手说过"来判 supported —— 而"用户说过"
+#    根本不是事实依据（用户可能记错、说错），"助手说过"更是自己证明自己。
+#    那样一来，整条"引用必须可溯源"的保证就被悄悄换掉了，
+#    而表面上所有检查仍然全绿。
+#
+#    这与项目里其它地方是同一条取向：**判定类节点只喂它该判的东西**。
 KB_VERIFY_SYSTEM = BASE_RULES + """
 
 【任务】逐句核对草稿：每一句事实性表述是否被它标注的 evidence 支持。

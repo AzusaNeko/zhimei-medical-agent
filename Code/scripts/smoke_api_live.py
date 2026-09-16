@@ -134,28 +134,6 @@ async def sse(client: httpx.AsyncClient, method: str, url: str,
         return -1, "", events
 
 
-async def sse_detail(client: httpx.AsyncClient, method: str, url: str,
-                     body: dict) -> tuple[int, dict | None, list[tuple[str, dict]]]:
-    """同 sse()，但非 200 时把 JSON 错误体也解析出来（用于断言 detail.code）。
-
-    用流式方式发请求而不是 client.post()：该端点在 200 时返回的是
-    text/event-stream，非流式调用会一直等整个响应体结束，行为不一致。
-    """
-    try:
-        async with client.stream(method, url, json=body) as resp:
-            if resp.status_code != 200:
-                raw = await resp.aread()
-                try:
-                    payload = json.loads(raw.decode("utf-8", "ignore"))
-                except Exception:  # noqa: BLE001
-                    payload = {"_raw": raw.decode("utf-8", "ignore")[:200]}
-                return resp.status_code, payload.get("detail", payload), []
-        return 200, None, []
-    except Exception as exc:  # noqa: BLE001
-        print(f"    !! 请求失败 {method} {url}：{type(exc).__name__}: {exc}")
-        return -1, None, []
-
-
 async def safe(client: httpx.AsyncClient, method: str, url: str, **kw) -> httpx.Response | None:
     """网络层出错时返回 None，而不是把整个脚本打断。"""
     try:
@@ -369,20 +347,46 @@ async def main() -> int:
                   r is not None and r.status_code == 200,
                   f"HTTP {getattr(r, 'status_code', 'network-error')}")
 
-            code_409, detail_409, _ = await sse_detail(
-                client, "POST", f"/api/chat/{s_em}/stream", {"text": "在吗"})
-            check("接单后聊天接口拒绝 AI 自动回复（409）", code_409 == 409, f"HTTP {code_409}")
-            check("拒绝原因标明是人工接管",
-                  (detail_409 or {}).get("code") == "human_takeover", str(detail_409))
+            # ★ 接管期间用户仍然可以说话：200 + human_takeover 事件，
+            #   消息落库，但 AI 不出正文。断言的是"没有 final"，不是状态码。
+            code_tk, _, ev_tk = await sse(client, "POST", f"/api/chat/{s_em}/stream",
+                                          {"text": "补充：现在还有点发烧"})
+            check("接单后用户仍可发言（不再 409 挡人）", code_tk == 200, f"HTTP {code_tk}")
+            check("回的是 human_takeover 事件（明确告知 AI 已暂停）",
+                  "human_takeover" in names(ev_tk), str(names(ev_tk)))
+            check("接管期间没有 AI 正文（不抢话）", "final" not in names(ev_tk),
+                  str(names(ev_tk)))
+            r = await safe(client, "get", f"/api/sessions/{s_em}")
+            body = r.json() if r is not None and r.status_code == 200 else {}
+            check("用户补充的话已落库（坐席看得到）",
+                  any("发烧" in (m.get("content") or "")
+                      for m in (body.get("messages") or [])),
+                  str([m.get("content", "")[:16] for m in (body.get("messages") or [])]))
+
+            # ★ 接管期间"确认执行"也必须**明确不执行**。
+            #   不可逆的操作不能因为"人工在场"就含糊过去：用户点了确认，
+            #   系统既不能执行，也不能让他以为执行了。
+            code_cf, _, ev_cf = await sse(client, "POST", f"/api/chat/{s_em}/confirm",
+                                          {"confirmed": True, "plan_hash": "0" * 32})
+            check("接管期间确认执行 → 返回接管回执（不是静默成功）",
+                  code_cf == 200 and "human_takeover" in names(ev_cf),
+                  f"HTTP {code_cf} {names(ev_cf)}")
+            check("回执里 executed=false（明确没有执行）",
+                  (next((d for n, d in ev_cf if n == "human_takeover"), {})
+                   .get("executed") is False),
+                  str(next((d for n, d in ev_cf if n == "human_takeover"), {})))
 
             r = await safe(client, "post", f"/ops/tickets/{tid}/close", headers=OPS_HEADERS,
                            json={"reason": "已电话联系并给出急诊指引"})
             check("坐席关单成功", r is not None and r.status_code == 200,
                   f"HTTP {getattr(r, 'status_code', 'network-error')}")
 
-            code_after, _, _ = await sse(client, "POST", f"/api/chat/{s_em}/stream",
-                                         {"text": "热玛吉痛不痛"})
-            check("关单后 AI 恢复自动回复（不再是 409）", code_after == 200, f"HTTP {code_after}")
+            code_after, _, ev_after = await sse(client, "POST", f"/api/chat/{s_em}/stream",
+                                                {"text": "热玛吉痛不痛"})
+            check("关单后 AI 恢复自动回复（有 final、且不是接管回执）",
+                  code_after == 200 and "final" in names(ev_after)
+                  and "human_takeover" not in names(ev_after),
+                  f"HTTP {code_after} {names(ev_after)}")
 
         # ══════════════ 5 运营面板与推送 ══════════════
         section("5. 运营后台：监控面板与 SSE 推送")

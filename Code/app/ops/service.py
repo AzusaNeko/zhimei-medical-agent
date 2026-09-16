@@ -67,6 +67,10 @@ async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = 
             # 测试工单带标记：队列默认已经把它们过滤掉了，但"显示测试工单"
             # 打开时，界面上必须能一眼看出哪张是测试的 —— 否则就等于没标记。
             "is_test": bool(t.get("is_test")),
+            # 会话里的消息条数。接管期间用户仍然可以发言（AI 不答但要转给坐席），
+            # 坐席台靠这个计数变化发现"顾客又补充了内容"，从而自动刷新详情 ——
+            # 否则坐席会一直盯着一份他接单那一刻的快照。
+            "msg_count": int(t.get("msg_count") or 0),
             # 队列行必须能看出"这事大概是什么"，否则坐席得点进去才知道要不要先接
             "context": _context_line(t.get("profile_summary"), t.get("reason")),
         })
