@@ -41,6 +41,11 @@ models/
 *.pt
 *.pth
 
+# ── 工作区内的便携工具（不进仓库）──
+# 本机装不了系统级 gh（winget 要写 Program Files，沙箱不允许），
+# 于是把便携版放在 Code/.tools 下用。15.5 MB 的二进制不该进仓库。
+.tools/
+
 # ── 本地数据与运行产物 ──
 *.log
 *.db
