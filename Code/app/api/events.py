@@ -96,3 +96,84 @@ def map_patch(node: str, patch: Any) -> list[tuple[str, dict]]:
 
 def error_event(code: str, message: str, **extra: Any) -> tuple[str, dict]:
     return (EVENT_ERROR, {"code": code, "message": message, **extra})
+
+
+# ══════════════════════════════════════════════════════════════
+#  节点输出摘要（**只在 trace 模式下发送**）
+# ══════════════════════════════════════════════════════════════
+
+#: 每个节点摘要的总长度上限（字符）。超出就截断并标注。
+#: 为什么必须有上限：有些节点的 patch 很大（kb_evidence 的证据列表、
+#: risk_gate 的三份面板意见），原样塞进 SSE 会让一帧几万字符 ——
+#: 演示页面卡住、日志爆炸，而且没人会真去读那么多。
+NODE_DETAIL_LIMIT = 1800
+
+#: 不进摘要的键。
+#:
+#: · audit_log —— 每个节点都会追加一条自己的事件，对"这个节点产出了什么"
+#:   没有信息量（它说的就是"我跑过了"，而轨迹本身已经在说这件事），
+#:   留着只会把真正有用的字段挤掉。
+#: · hard_rule_hits_history —— 跨轮累积的历史转存，属于历史而非本轮产出。
+#:
+#: ★ `panel_reviews` **不能**跳过（我一开始跳了，是错的）：
+#:   三个审查面板（review_medical / review_ad / review_privacy）**唯一的产出**
+#:   就是这个字段。跳过它，点开审查节点只会看到"（无输出）" ——
+#:   而"这三位分别判了什么"恰恰是最值得看的东西。
+#:   它确实会累积多轮，但 _brief() 已经把列表截到 4 项、字典深度截到 2 层，
+#:   实测摘要最长 1702 字符，远在上限之内。
+_DETAIL_SKIP = {"audit_log", "__interrupt__", "hard_rule_hits_history"}
+
+
+def _brief(value: Any, depth: int = 0) -> Any:
+    """把任意值压成"够看懂、又不会失控"的形态。"""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 400 else value[:400] + f"…（共 {len(value)} 字）"
+    if isinstance(value, (list, tuple)):
+        head = [_brief(v, depth + 1) for v in value[:4]]
+        if len(value) > 4:
+            head.append(f"…共 {len(value)} 项")
+        return head
+    if isinstance(value, dict):
+        if depth >= 2:
+            return f"<{len(value)} 个字段>"
+        return {k: _brief(v, depth + 1) for k, v in list(value.items())[:10]}
+    s = str(value)
+    return s[:200] + ("…" if len(s) > 200 else "")
+
+
+def node_detail(patch: Any) -> dict:
+    """把某个节点写回的状态压成一小段可读摘要。
+
+    ★ 这是**调试信息**，与 status 事件的性质完全不同，必须看清这个区别：
+
+        status  —— 固定话术，给终端用户看的（"正在查阅审核资料…"）
+        node    —— 图的执行结构 + 节点做出来的东西，给演示和排障看的
+
+      所以它只在 `?trace=1` 时发送。而且这里会带出**未经审查的中间产物**
+      （草稿、审查意见、检索到的证据原文）—— 这些内容在正常流程里
+      是绝对不该给顾客看到的（顾客只应看到 final 里那份"已审正文"）。
+
+      结论：**trace 模式绝不能在面向真实顾客的页面上开启**。
+      聊天页里那个勾选框是演示开关，不是产品功能。
+    """
+    if not isinstance(patch, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for k, v in patch.items():
+        if k in _DETAIL_SKIP:
+            continue
+        out[k] = _brief(v)
+    text = json.dumps(out, ensure_ascii=False, default=str)
+    if len(text) <= NODE_DETAIL_LIMIT:
+        return out
+    # 超限：按"字段数保留 + 整体截断"处理，并明确标注被截断了
+    trimmed: dict[str, Any] = {}
+    for k in out:
+        trimmed[k] = out[k]
+        if len(json.dumps(trimmed, ensure_ascii=False, default=str)) > NODE_DETAIL_LIMIT - 60:
+            trimmed.pop(k)
+            break
+    trimmed["_truncated"] = f"摘要超长已截断（原 {len(text)} 字符）"
+    return trimmed

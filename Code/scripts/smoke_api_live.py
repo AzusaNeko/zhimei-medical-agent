@@ -366,9 +366,19 @@ async def main() -> int:
               f"主图 {sum(1 for d in node_evs if not d['ns'])} / 子图 {sum(1 for d in node_evs if d['ns'])}")
         check("最终仍有且只有一个 final（轨迹不影响出站契约）",
               names(ev_on).count("final") == 1, str(names(ev_on)))
-        check("轨迹里不出现任何节点 patch 的内容字段（只暴露结构，不暴露正文）",
-              all(set(d) == {"node", "seq", "ms", "ns"} for d in node_evs),
-              str(sorted(set(k for d in node_evs for k in d))))
+        # ★ 这条断言原来写的是"轨迹里不出现任何内容字段"，现在反过来：
+        #   节点输出**刻意**随 trace 一起发（点开节点能看到它写出了什么）。
+        #   但必须有长度上限 —— 有些节点的 patch 很大（证据列表、三份面板意见），
+        #   原样塞进 SSE 会让一帧几万字符，页面卡住、日志爆炸。
+        #   所以改守"有内容、但被限长"。
+        check("node 事件带节点输出摘要（点开节点能看到它写出了什么）",
+              any(d.get("detail") for d in node_evs),
+              "所有节点的 detail 都为空")
+        worst = max((len(json.dumps(d.get("detail"), ensure_ascii=False, default=str))
+                     for d in node_evs), default=0)
+        check("节点摘要被限长（不会一帧几万字符）", worst <= 2400, f"最长 {worst} 字符")
+        check("detail 是对象而不是整段 patch 原文",
+              all(isinstance(d.get("detail"), dict) for d in node_evs), "")
 
         # ══════════════ 6 角色权限（真实 HTTP 下的 403）══════════════
         section("6. 角色权限")

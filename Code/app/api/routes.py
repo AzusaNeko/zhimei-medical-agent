@@ -33,7 +33,8 @@ from ..runtime import Runtime
 from ..services import text as T
 from ..services import trace
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
-                     EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch, ping, sse)
+                     EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch,
+                     node_detail, ping, sse)
 from .schemas import ChatIn, ConfirmIn, CreateSessionIn, HealthOut, MessageOut, SessionOut
 
 router = APIRouter(prefix="/api")
@@ -194,17 +195,16 @@ async def _event_source(rt: Runtime, session_id: str,
                         yield sse(name, data)
                     continue
                 if trace_enabled:
-                    # ★ 只发 seq / ms / ns 三个字段，**不发"是否并行"**。
-                    #   原本我想用超步序号标注并行分支（三个审查面板是同一超步里被 Send
-                    #   分派出去的），但实测推翻了：48 个节点恰好占 48 个超步，
-                    #   连那三个并行面板也各自单独成块。所以从事件流里**推不出**并行关系，
-                    #   与其发一个语义撑不住的字段，不如只给能证实的东西 ——
-                    #   顺序（seq）、这一段耗时（ms）、属于哪个子图（ns）。
-                    #   前端对"哪些节点是并行的"用静态标注说明，那是文档，不是推断。
+                    # ★ 三个"结构"字段 + 一个"内容"字段（detail）。
+                    #   detail 会带出该节点写回的状态摘要 —— 包括**未审草稿、
+                    #   审查意见、检索到的证据原文**。这些在正常流程里绝不外露，
+                    #   所以它只在这里发（trace 模式），生产环境必须关掉。
+                    #   详见 events.node_detail 的注释。
                     seq += 1
                     yield sse(EVENT_NODE, {
                         "node": node, "seq": seq, "ms": elapsed_ms,
                         "ns": list(namespace),
+                        "detail": node_detail(patch),
                     })
                 if node == "normalize" and isinstance(patch, dict) and patch.get("turn_id"):
                     turn_id = patch["turn_id"]

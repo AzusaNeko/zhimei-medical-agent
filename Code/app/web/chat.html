@@ -96,7 +96,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
           vertical-align:middle}
 .nodes{flex:1;overflow-y:auto;margin:0;padding:8px 0;list-style:none}
 .node{display:grid;grid-template-columns:26px 1fr auto;gap:9px;align-items:center;
-      padding:6px 18px;border-left:3px solid transparent;animation:rise .16s ease-out}
+      padding:6px 18px;border-left:3px solid transparent;animation:rise .16s ease-out;
+      cursor:pointer}
+.node:hover{background:#f2f8f6}
 .node .idx{font:11px Consolas,monospace;color:#9fb0bb;text-align:right}
 .node .nm{font-size:13px;display:flex;align-items:center;gap:7px;min-width:0}
 .node .nm b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -104,11 +106,28 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .node .ms{font:11px Consolas,monospace;color:var(--muted);white-space:nowrap}
 .node .llm{font:10px Consolas,monospace;padding:1px 5px;border-radius:3px;
            background:#fff4dd;color:#6d4c08;flex:none}
+.node .caret{font:10px Consolas,monospace;color:#b6c4cd;flex:none;transition:transform .12s}
+.node.open .caret{transform:rotate(90deg)}
 .node.g-kb{border-left-color:var(--g-kb);background:#f7fafd}
 .node.g-risk{border-left-color:var(--g-risk);background:#fdfaf6}
 .node.g-main{border-left-color:#e3eaee}
 .node.hot{background:#eaf4f2;border-left-color:var(--accent)}
 .node.hot .idx{color:var(--accent)}
+.node.empty .nm b{color:#9fb0bb}
+
+/* 节点输出（点开展示） */
+.nd{margin:0 0 4px 26px;padding:9px 12px 11px;border-left:3px solid var(--line);
+    background:#fbfcfd;border-radius:0 8px 8px 0;animation:rise .14s ease-out}
+.nd-desc{font-size:12px;color:var(--muted);padding-bottom:7px;margin-bottom:7px;
+         border-bottom:1px dashed #e6ecef}
+.nd-row{display:grid;grid-template-columns:132px 1fr;gap:10px;padding:3px 0;
+        font-size:12px;align-items:start}
+.nd-key{font:11.5px Consolas,monospace;color:var(--accent);word-break:break-all}
+.nd-val{font:11.5px/1.65 Consolas,monospace;color:#2b4256;white-space:pre-wrap;
+        word-break:break-word;margin:0}
+.nd-none{font-size:12px;color:var(--muted)}
+.nd-warn{font-size:11px;color:#8a5a1e;background:#fff8e8;border:1px solid #f0e0bb;
+         border-radius:5px;padding:4px 8px;margin-bottom:7px}
 .trace-empty{color:var(--muted);font-size:13px;padding:22px 18px;text-align:center}
 .trace-foot{padding:11px 18px;border-top:1px solid var(--line);background:#fbfcfd;
             font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 16px}
@@ -157,12 +176,16 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <span><i style="background:var(--g-kb)"></i>科普子图</span>
       <span><i style="background:var(--g-risk)"></i>风险审查子图</span>
       <span><i style="background:#fff4dd;border:1px solid #e6d3a8"></i>会调用大模型（烧 token）</span>
+      <span style="color:#8a5a1e">点任意节点可展开它的输出</span>
     </div>
     <ol class="nodes" id="nodes"></ol>
     <div class="trace-foot" id="traceFoot" style="display:none"></div>
     <div class="hint" id="traceHint">
-      提问后，这里会**按顺序实时**列出图里真正执行过的节点，
-      包括子图内部节点。耗时是相邻两次事件之间的间隔。
+      提问后，这里会按顺序实时列出图里真正执行过的节点（含子图内部节点）。
+      耗时是相邻两次事件之间的间隔。<br>
+      <b style="color:#8a5a1e">★ 这是调试视图</b>：展开后能看到节点写回的原始状态，
+      其中可能包含<b>未经审查的中间产物</b>（草稿、审查意见、检索到的原文）。
+      顾客只应看到对话区里那份「已审正文」。<b>面向真实顾客时必须关掉这个勾选框。</b>
     </div>
   </aside>
 </div>
@@ -304,17 +327,59 @@ function addNode(d) {
   nodeSeq += 1;
   li.appendChild(el("span", "idx", String(nodeSeq)));
   const nm = el("span", "nm");
+  const caret = el("span", "caret", "▶");
+  nm.appendChild(caret);
   nm.appendChild(el("b", null, meta.n));
   nm.appendChild(el("span", "id", d.node));
   if (meta.llm) nm.appendChild(el("span", "llm", "LLM"));
   li.appendChild(nm);
   li.appendChild(el("span", "ms", d.ms + "ms"));
-  li.title = meta.d + (d.ns && d.ns.length ? "\n子图：" + d.ns.join(" › ") : "");
+
+  const detail = d.detail || {};
+  const nKeys = Object.keys(detail).length;
+  if (!nKeys) li.classList.add("empty");
+  li.title = meta.d + "　（点击查看该节点的输出）";
+
+  // ── 点开展示该节点写回的状态 ──
+  const box = el("div", "nd");
+  box.style.display = "none";
+  const desc = el("div", "nd-desc", meta.d);
+  box.appendChild(desc);
+  if (!nKeys) {
+    box.appendChild(el("div", "nd-none", "（该节点没有写出状态 —— 它只做判断或只调用模型）"));
+  } else {
+    // 提醒放在最显眼处：这里可能包含未经审查的中间产物
+    const warn = el("div", "nd-warn",
+      "调试信息：以下为该节点写回的原始状态，可能包含未经审查的中间产物，勿对顾客展示");
+    box.appendChild(warn);
+    for (const k of Object.keys(detail)) {
+      const row = el("div", "nd-row");
+      row.appendChild(el("span", "nd-key", k));
+      const v = detail[k];
+      let text;
+      if (typeof v === "string") text = v;
+      else if (v === null || typeof v === "number" || typeof v === "boolean") text = String(v);
+      else text = JSON.stringify(v, null, 1);
+      row.appendChild(el("pre", "nd-val", text));
+      box.appendChild(row);
+    }
+  }
+  li.onclick = () => {
+    const open = box.style.display !== "none";
+    box.style.display = open ? "none" : "block";
+    li.classList.toggle("open", !open);
+  };
+
   $("nodes").appendChild(li);
+  $("nodes").appendChild(box);
   // 只保留最近一条高亮，避免整列都在闪
   document.querySelectorAll(".node.hot").forEach((n) => n.classList.remove("hot"));
   li.classList.add("hot");
-  $("nodes").scrollTop = $("nodes").scrollHeight;
+  // ★ 有节点被展开时不要自动滚到底：用户正在看某个节点的输出，
+  //   把它滚走等于把用户正在读的东西抢走。
+  if (!document.querySelector(".node.open")) {
+    $("nodes").scrollTop = $("nodes").scrollHeight;
+  }
 }
 function finishTrace(ok) {
   const rows = [...document.querySelectorAll(".node")];

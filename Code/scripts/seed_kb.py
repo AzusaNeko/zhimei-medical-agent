@@ -133,12 +133,27 @@ async def _seed_business(pg: PgStore) -> None:
             slots)
 
         # 用户 / 身份 / 授权 / 画像
+        #
+        # ★★ 演示用户必须是**固定 UUID**，不能用 gen_random_uuid() ★★
+        #
+        #   原来的写法是 `INSERT ... ON CONFLICT DO NOTHING RETURNING user_id`，
+        #   看起来是"有就复用、没有就建"。但 app_user 的主键是
+        #   `user_id UUID DEFAULT gen_random_uuid()` —— **每次插入都是一个新 UUID，
+        #   永远不会冲突**，所以那句 ON CONFLICT 形同虚设：**每跑一次种子就多一个演示用户**。
+        #
+        #   它带来的连锁反应很难查：演示预约那行的主键是固定的，而它的
+        #   `DO UPDATE` 里没有更新 user_id，于是预约永远绑在**第一次**那个用户上。
+        #   之后再跑种子，打印出来的新 user_id 名下根本没有预约 ——
+        #   改约场景会走"查不到可改约的预约"的诚实降级，看上去像功能坏了。
+        #
+        #   固定下来还有额外好处：文档、脚本、肌肉记忆里的 user_id 不再漂移。
+        DEMO_USER_ID = "22222222-2222-2222-2222-222222222222"
         user_id = await conn.fetchval(
-            """INSERT INTO app.app_user (display_name, gender, birth_year)
-               VALUES ('演示用户', 2, 1993)
-               ON CONFLICT DO NOTHING RETURNING user_id""")
-        if user_id is None:
-            user_id = await conn.fetchval("SELECT user_id FROM app.app_user LIMIT 1")
+            """INSERT INTO app.app_user (user_id, display_name, gender, birth_year)
+               VALUES ($1, '演示用户', 2, 1993)
+               ON CONFLICT (user_id) DO UPDATE
+               SET display_name = EXCLUDED.display_name
+               RETURNING user_id""", DEMO_USER_ID)
         await conn.execute(
             """INSERT INTO app.user_identity (user_id, channel, external_id, verified)
                VALUES ($1,'demo','demo-user-0001',true) ON CONFLICT DO NOTHING""", user_id)
@@ -158,11 +173,15 @@ async def _seed_business(pg: PgStore) -> None:
         #   status='booked' 的预约 —— 用 DO NOTHING 的话，【演示只能成功跑一次】，
         #   第二次开始就永远"查不到可改约的预约"，而现象看起来像功能坏了。
         #   version 不动：它由改约自己 +1，是乐观锁的基准，重置反而会掩盖并发问题。
+        # ★ user_id 也必须一起更新：预约的主键是固定的，而演示用户以前每跑一次种子
+        #   就换一个 UUID，导致这行一直绑在最早那个用户上。现在用户 id 固定了，
+        #   这条 UPDATE 是为了把历史上绑错的行纠正回来（幂等，跑几次都一样）。
         await conn.execute(
             """INSERT INTO app.appointment (appointment_id, user_id, slot_id, project_id, status, fee_cents)
                VALUES ('11111111-1111-1111-1111-111111111111',$1,$2,'P-01','booked',8000)
                ON CONFLICT (appointment_id) DO UPDATE
-               SET status='booked', slot_id=EXCLUDED.slot_id, updated_at=now()""", user_id, slot_id)
+               SET status='booked', slot_id=EXCLUDED.slot_id,
+                   user_id=EXCLUDED.user_id, updated_at=now()""", user_id, slot_id)
         print("✓ 业务模拟数据已就绪（门店 / 医生 / 资质 / 项目 / 档期 / 用户 / 画像 / 预约）")
         print(f"  ★ 演示用户 user_id = {user_id}")
         print(f"    真实档位跑 CLI 时请带上： python -m app.cli --demo --user {user_id}")
