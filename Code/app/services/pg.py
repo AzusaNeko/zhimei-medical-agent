@@ -120,6 +120,41 @@ class PgStore:
             _uuid(session_id), limit)
         return [dict(r) for r in reversed(rows)]
 
+    async def list_sessions(self, *, limit: int = 30,
+                            channel: str | None = None) -> list[dict]:
+        """会话列表（给"新对话 / 切换对话"用）。
+
+        标题取**第一条用户消息**，而不是让用户自己命名 —— 对话类产品里
+        手动命名几乎没人用，而第一句话天然就是这一轮的意图。
+        没有消息的会话（建了但还没说话）标题为 None，前端显示成"（新对话）"。
+
+        ★ limit 是必须的：会话表只增不减，不设上限的话这个接口迟早会
+          一次返回几万条。真正的分页要配合游标，MVP 先按"最近活跃的前 N 条"来。
+        ★ 生产环境这里必须再按登录用户过滤（`WHERE user_id = $x`）——
+          现在没有鉴权层，列出的是全部会话，仅适用于演示。
+        """
+        rows = await self._fetch(
+            """SELECT s.session_id, s.channel, s.status, s.ai_enabled,
+                      s.started_at, s.last_active_at,
+                      (SELECT m.content FROM app.chat_message m
+                        WHERE m.session_id = s.session_id AND m.role = 'user'
+                        ORDER BY m.message_id LIMIT 1)              AS title,
+                      (SELECT count(*) FROM app.chat_message m
+                        WHERE m.session_id = s.session_id)          AS msg_count
+                 FROM app.chat_session s
+                WHERE ($1::text IS NULL OR s.channel = $1)
+                ORDER BY s.last_active_at DESC NULLS LAST,
+                         s.started_at DESC
+                LIMIT $2""",
+            channel, int(limit))
+        out = []
+        for r in rows:
+            d = _row(r)
+            title = (d.get("title") or "").strip().replace("\n", " ")
+            d["title"] = (title[:40] + "…") if len(title) > 40 else title
+            out.append(d)
+        return out
+
     # ══════════════ 审计 ══════════════
     async def write_audit(self, *, thread_id: str, session_id: str, review_round: int,
                           review_kind: str, verdict: str, risk_level: str, content_hash: str,

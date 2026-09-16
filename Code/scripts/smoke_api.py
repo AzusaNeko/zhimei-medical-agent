@@ -194,6 +194,35 @@ async def main() -> int:
                   all(m.get("review_kind") for m in msgs if m["role"] == "assistant"),
                   json.dumps(msgs, ensure_ascii=False)[:160])
 
+            # ══════════════ 7 会话列表（新对话 / 切换对话）══════════════
+            section("7. 会话列表：新建与切换的数据基础")
+            r = await client.get("/api/sessions", params={"channel": "web", "limit": 50})
+            check("GET /api/sessions → 200 且返回 sessions 数组",
+                  r.status_code == 200 and isinstance(r.json().get("sessions"), list),
+                  f"{r.status_code} {r.text[:100]}")
+            lst = r.json()["sessions"]
+            mine = next((s for s in lst if s["session_id"] == sid), None)
+            check("刚聊过的会话出现在列表里", mine is not None, f"共 {len(lst)} 条")
+            check("标题取自第一条用户消息（不用手动命名）",
+                  mine is not None and (mine.get("title") or "").strip() != "",
+                  str((mine or {}).get("title")))
+            check("带消息条数（前端显示用）",
+                  mine is not None and mine.get("msg_count", 0) >= 2,
+                  str((mine or {}).get("msg_count")))
+            check("带 last_active_at（排序依据）",
+                  mine is not None and bool(mine.get("last_active_at")),
+                  str((mine or {}).get("last_active_at")))
+            check("带 ai_enabled（前端据此禁用输入）",
+                  mine is not None and "ai_enabled" in mine, str(mine))
+
+            r = await client.get("/api/sessions", params={"channel": "nosuch"})
+            check("channel 过滤生效（别的渠道不会混进来）",
+                  r.json()["count"] == 0, str(r.json()["count"]))
+
+            r = await client.get("/api/sessions", params={"limit": 1})
+            check("limit 生效（会话表只增不减，必须有上限）",
+                  len(r.json()["sessions"]) <= 1, str(len(r.json()["sessions"])))
+
     # ══════════════ 汇总 ══════════════
     print("\n" + "═" * 60)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

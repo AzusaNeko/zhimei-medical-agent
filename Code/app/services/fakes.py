@@ -131,10 +131,46 @@ class FakePg:
             "completion_tokens": completion_tokens, "ok": ok, "error": error,
         })
 
+    async def ensure_session(self, session_id: str, *, channel: str = "cli",
+                             user_id: str | None = None) -> None:
+        """建会话行（幂等），与 PgStore.ensure_session 同形。
+
+        ★ 这个方法原来在 fake 里**根本不存在**（真实档位有），于是：
+          · 会话的 channel / last_active_at 在 fake 下永远是缺失的，
+            连"会话列表按最近活动排序"这种行为都测不出来；
+          · normalize 里是靠 `getattr(pg, "ensure_session", None)` 兜住的，
+            所以不报错 —— 又一个"fake 比真实世界宽容"的例子。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        sess = self.sessions.get(session_id)
+        if sess is None:
+            self.sessions[session_id] = {
+                "session_id": session_id, "user_id": user_id or "U-0001",
+                "channel": channel, "ai_enabled": True, "emergency": False,
+                "status": "active", "thread_id": session_id,
+                "started_at": now, "last_active_at": now,
+            }
+        else:
+            # ★ 只更新 last_active_at，**不要动 channel / user_id** ——
+            #   必须与真实库的 `ON CONFLICT (session_id) DO UPDATE SET last_active_at = now()`
+            #   完全一致。
+            #
+            #   第一版我在这里顺手把 channel 也覆盖了，结果踩坑：会话创建时是
+            #   channel='web'（用户在网页上），而聊天请求里的 state["channel"] 是
+            #   'api'（这条消息走的是 API 传输）—— 两者含义不同。覆盖之后，
+            #   "按 channel 过滤会话列表"就再也找不到网页会话了。
+            #   而真实库不受影响（它的 ON CONFLICT 本来就没更新 channel），
+            #   于是这变成了一个**只存在于 fake 档位**的假 bug ——
+            #   或者说，fake 又一次比真实世界"更不一样"，而这次是我自己造的。
+            sess["last_active_at"] = now
+
     async def get_session(self, session_id: str) -> dict:
         return self.sessions.setdefault(session_id, {
-            "session_id": session_id, "user_id": "U-0001", "ai_enabled": True,
-            "emergency": False, "status": "active", "thread_id": session_id,
+            "session_id": session_id, "user_id": "U-0001", "channel": "web",
+            "ai_enabled": True, "emergency": False, "status": "active",
+            "thread_id": session_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "last_active_at": datetime.now(timezone.utc).isoformat(),
         })
 
     async def load_auth(self, session_id: str) -> dict:
@@ -156,6 +192,33 @@ class FakePg:
     async def recent_turns(self, session_id: str, limit: int = 5) -> list[dict]:
         rows = [m for m in self.messages if m["session_id"] == session_id]
         return rows[-limit:]
+
+    async def list_sessions(self, *, limit: int = 30,
+                            channel: str | None = None) -> list[dict]:
+        """与 PgStore.list_sessions 同形（内存版）。
+
+        ★ 必须同形：这两个实现会互换（fake 档位跑测试、real 档位跑生产），
+          形状不一致的话，接口层和前端在 fake 下测过了、上真实库就崩。
+        """
+        out = []
+        for sid, sess in self.sessions.items():
+            if channel and sess.get("channel") != channel:
+                continue
+            msgs = [m for m in self.messages if m.get("session_id") == sid]
+            first_user = next((m["content"] for m in msgs if m.get("role") == "user"), None)
+            title = (first_user or "").strip().replace("\n", " ")
+            out.append({
+                "session_id": sid,
+                "channel": sess.get("channel", "web"),
+                "status": sess.get("status", "active"),
+                "ai_enabled": sess.get("ai_enabled", True),
+                "title": (title[:40] + "…") if len(title) > 40 else title,
+                "msg_count": len(msgs),
+                "last_active_at": sess.get("last_active_at"),
+            })
+        # 按最近活动倒序（与真实库的 ORDER BY last_active_at DESC 一致）
+        out.sort(key=lambda x: str(x.get("last_active_at") or ""), reverse=True)
+        return out[:limit]
 
     # ── 审计 ──
     async def write_audit(self, **kw: Any) -> int:

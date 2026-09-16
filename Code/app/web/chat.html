@@ -30,15 +30,37 @@ code,.mono{font-family:Consolas,"SF Mono",Menlo,monospace}
 .dot.busy{background:var(--warn);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
 
-/* ── 布局 ── */
-.wrap{display:grid;grid-template-columns:minmax(420px,1.15fr) minmax(360px,1fr);
-      gap:16px;max-width:1500px;margin:16px auto;padding:0 22px 28px;align-items:start}
-@media(max-width:1080px){.wrap{grid-template-columns:1fr}}
+/* ── 布局：会话列表 | 对话 | 执行轨迹 ── */
+.wrap{display:grid;
+      grid-template-columns:236px minmax(360px,1fr) minmax(330px,.92fr);
+      gap:16px;max-width:1660px;margin:16px auto;padding:0 22px 28px;align-items:start}
+@media(max-width:1360px){.wrap{grid-template-columns:236px minmax(360px,1fr)} .trace{display:none}}
+@media(max-width:900px){.wrap{grid-template-columns:1fr} .convs{display:none}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
       display:flex;flex-direction:column;overflow:hidden}
 .card>h2{margin:0;padding:12px 18px;font-size:14px;border-bottom:1px solid var(--line);
          background:#fbfcfd;display:flex;justify-content:space-between;align-items:center;gap:10px}
 .card>h2 .sub{font:12px Consolas,monospace;color:var(--muted);font-weight:400}
+
+/* ── 会话列表 ── */
+.convs{height:calc(100vh - 132px);min-height:560px}
+.convs>h2{padding:10px 12px 10px 16px}
+.convs>h2 button{font-size:12.5px;padding:5px 11px;border-radius:999px;background:#eef5f3;
+                 border-color:#8fbfb3;color:var(--accent);white-space:nowrap}
+.conv-list{flex:1;overflow-y:auto;padding:6px 0}
+.conv{padding:9px 16px;border-bottom:1px solid #eef2f5;cursor:pointer;
+      border-left:3px solid transparent}
+.conv:hover{background:#f4f9f8}
+.conv.active{background:#eaf4f2;border-left-color:var(--accent)}
+.cv-title{font-size:13px;line-height:1.45;overflow:hidden;text-overflow:ellipsis;
+          white-space:nowrap}
+.conv.unread .cv-title{color:var(--muted)}
+.cv-meta{font:11px Consolas,monospace;color:var(--muted);margin-top:3px;
+         display:flex;gap:8px;align-items:center}
+.cv-badge{font:10px Consolas,monospace;padding:1px 5px;border-radius:3px;
+          background:#e8f1fb;color:#17405f}
+.cv-badge.off{background:#ffe3de;color:#8a2a1e}
+.conv-empty{color:var(--muted);font-size:12.5px;padding:18px 16px;line-height:1.7}
 
 /* ── 对话区 ── */
 .chat{height:calc(100vh - 132px);min-height:560px}
@@ -152,9 +174,17 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </header>
 
 <div class="wrap">
-  <!-- ══════ 左：对话 ══════ -->
+  <!-- ══════ 左：会话列表 ══════ -->
+  <aside class="card convs">
+    <h2>对话 <button id="newChat">＋ 新对话</button></h2>
+    <div class="conv-list" id="convList">
+      <div class="conv-empty">还没有历史对话。<br>发第一条消息就会出现在这里。</div>
+    </div>
+  </aside>
+
+  <!-- ══════ 中：对话 ══════ -->
   <section class="card chat">
-    <h2>对话 <span class="sub" id="sidLabel">新会话</span></h2>
+    <h2>对话 <span class="sub" id="sidLabel">新对话</span></h2>
     <div class="messages" id="messages"></div>
     <div class="statusbar" id="statusbar"><i class="spin"></i><span id="statusText"></span></div>
     <div class="composer">
@@ -280,6 +310,121 @@ let sid = null;
 let busy = false;
 let pendingPlan = null;     // 挂起中的方案
 let nodeSeq = 0;
+let conversations = [];
+const LS_KEY = "zhimei.currentSession";   // 刷新后回到同一个会话
+
+/* ══════════════════════════════════════════════════════════════
+   会话列表：新建 / 切换
+   ══════════════════════════════════════════════════════════════ */
+function relTime(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  const d = (Date.now() - t) / 1000;
+  if (d < 60) return "刚刚";
+  if (d < 3600) return Math.floor(d / 60) + " 分钟前";
+  if (d < 86400) return Math.floor(d / 3600) + " 小时前";
+  if (d < 86400 * 2) return "昨天";
+  const dt = new Date(t);
+  return (dt.getMonth() + 1) + "-" + String(dt.getDate()).padStart(2, "0");
+}
+
+async function loadConversations() {
+  try {
+    const r = await fetch("/api/sessions?channel=web&limit=40");
+    conversations = (await r.json()).sessions || [];
+  } catch (e) {
+    conversations = [];
+  }
+  renderConversations();
+}
+
+function renderConversations() {
+  const box = $("convList");
+  box.innerHTML = "";
+  if (!conversations.length) {
+    box.appendChild(el("div", "conv-empty",
+      "还没有历史对话。\n发第一条消息就会出现在这里。"));
+    return;
+  }
+  for (const c of conversations) {
+    const item = el("div", "conv" + (c.session_id === sid ? " active" : ""));
+    item.appendChild(el("div", "cv-title",
+      c.title || "（新对话 · 还没说话）"));
+    const meta = el("div", "cv-meta");
+    meta.appendChild(el("span", null, relTime(c.last_active_at)));
+    if (c.msg_count) meta.appendChild(el("span", null, c.msg_count + " 条"));
+    if (c.ai_enabled === false) meta.appendChild(el("span", "cv-badge off", "人工接管"));
+    item.appendChild(meta);
+    item.onclick = () => switchTo(c.session_id);
+    box.appendChild(item);
+  }
+}
+
+/** 切到某个历史会话：拉历史消息重绘，并清空轨迹。 */
+async function switchTo(target) {
+  if (busy || target === sid) return;
+  setStatus("");
+  clearConfirm();
+  // ★ 轨迹不随历史恢复 —— 它记录的是"某一轮的实时执行过程"，
+  //   服务端没有持久化（那是调试数据，不值得进库）。
+  //   所以切换会话时清空并说明原因，而不是留着上一个会话的轨迹让人误解。
+  clearTrace(true);
+  $("messages").innerHTML = "";
+  try {
+    const r = await fetch("/api/sessions/" + target + "?limit=60");
+    const d = await r.json();
+    sid = target;
+    localStorage.setItem(LS_KEY, sid);
+    $("sidLabel").textContent = "会话 " + sid.slice(0, 8) + "…";
+    renderHistory(d);
+  } catch (e) {
+    addMsg("err", "加载历史失败：" + e.message);
+  }
+  await loadConversations();
+}
+
+function renderHistory(d) {
+  const msgs = d.messages || [];
+  const sess = d.session || {};
+  if (!msgs.length) {
+    addMsg("sys", "这是一个还没有对话记录的空会话。", [{text: "空会话", cls: ""}]);
+  }
+  for (const m of msgs) {
+    const role = m.role || "";
+    if (role === "user") addMsg("user", m.content || "");
+    else if (role === "agent") addMsg("bot", m.content || "", [{text: "坐席", cls: "warn"}]);
+    else if (role === "system") addMsg("sys", m.content || "");
+    else addMsg("bot", m.content || "", [{text: "已审正文", cls: "ok"}]);
+  }
+  // 人工接管状态：直接禁用输入，而不是让用户发出去再收 409
+  if (sess.ai_enabled === false) {
+    addMsg("sys", "该会话已由人工客服接管，AI 已停用。你的消息会直接进入人工队列。",
+           [{text: "人工接管", cls: "warn"}]);
+    $("input").disabled = true;
+    $("send").disabled = true;
+  } else {
+    $("input").disabled = false;
+    $("send").disabled = false;
+  }
+}
+
+/** 新对话：不预先建会话（免得留下一堆空会话），发第一条消息时才建。 */
+function newChat() {
+  if (busy) return;
+  sid = null;
+  localStorage.removeItem(LS_KEY);
+  $("sidLabel").textContent = "新对话";
+  $("messages").innerHTML = "";
+  $("input").disabled = false;
+  $("send").disabled = false;
+  setStatus("");
+  clearConfirm();
+  clearTrace(true);
+  renderConversations();       // 取消高亮
+  greeting();
+  $("input").focus();
+}
 
 /* ── 顶栏状态 ── */
 function setConn(state, text) {
@@ -314,11 +459,11 @@ function clearConfirm() {
 }
 
 /* ── 轨迹渲染 ── */
-function clearTrace() {
+function clearTrace(showHint) {
   $("nodes").innerHTML = "";
   $("traceFoot").style.display = "none";
-  $("traceMeta").textContent = "执行中…";
-  $("traceHint").style.display = "none";
+  $("traceMeta").textContent = showHint ? "等待提问" : "执行中…";
+  $("traceHint").style.display = showHint ? "block" : "none";
   nodeSeq = 0;
 }
 function addNode(d) {
@@ -538,17 +683,27 @@ async function send() {
   busy = true;
   $("send").disabled = true;
   if (!sid) {
+    // 会话是"懒创建"的：点「新对话」不建会话，发第一条消息时才建，
+    // 免得库里堆一堆没说过话的空会话。
     const r = await fetch("/api/sessions", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({channel: "web"})
     });
     sid = (await r.json()).session_id;
+    localStorage.setItem(LS_KEY, sid);
     $("sidLabel").textContent = "会话 " + sid.slice(0, 8) + "…";
   }
   await stream("/api/chat/" + sid + "/stream", {text: text});
+  await loadConversations();      // 标题/时间/条数都变了
 }
 
 /* ── 初始化 ── */
+function greeting() {
+  addMsg("bot", "您好，我是智美医美的在线顾问。\n" +
+    "可以问我项目区别、恢复期、门店与医生资质，也可以让我帮您改约。\n" +
+    "涉及个人是否适合、具体方案与效果，需要面诊评估。", [{text: "开场白", cls: ""}]);
+}
+
 EXAMPLES.forEach((t) => {
   const b = el("button", null, t.length > 18 ? t.slice(0, 17) + "…" : t);
   b.title = t;
@@ -556,6 +711,7 @@ EXAMPLES.forEach((t) => {
   $("examples").appendChild(b);
 });
 $("send").onclick = send;
+$("newChat").onclick = newChat;
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
@@ -565,9 +721,17 @@ fetch("/api/health").then((r) => r.json()).then((h) => {
   setConn("on", "已连接");
 }).catch(() => setConn("", "离线"));
 
-addMsg("bot", "您好，我是智美医美的在线顾问。\n" +
-  "可以问我项目区别、恢复期、门店与医生资质，也可以让我帮您改约。\n" +
-  "涉及个人是否适合、具体方案与效果，需要面诊评估。", [{text: "开场白", cls: ""}]);
+// 刷新后回到上次那个会话（如果它还在列表里）
+(async function boot() {
+  await loadConversations();
+  const last = localStorage.getItem(LS_KEY);
+  if (last && conversations.some((c) => c.session_id === last)) {
+    await switchTo(last);
+  } else {
+    greeting();
+  }
+  $("input").focus();
+})();
 </script>
 </body>
 </html>

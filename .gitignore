@@ -63,13 +63,16 @@ desktop.ini
 .DS_Store
 
 # ── 本地临时文件 ──
-# git commit -F <文件> 用的提交信息草稿。这类文件就在仓库目录里，
-# 一旦在删除之前跑了 git add -A 就会被误提交 —— **本项目已经误提交过三次**，
-# 每次都是"换了个文件名就漏了"（先是 .commit-msg.tmp，再是 commitmsg.txt，
-# 再是 msg2.txt）。所以这次不再逐个列举，直接用根目录锚定的宽匹配：
-# 以 / 开头 = 只匹配仓库根，不会误伤子目录里正常叫 msg.txt 的文件。
+# git commit 用的提交信息草稿。这类文件就在仓库目录里，一旦在删除之前跑了
+# git add -A 就会被误提交 —— **本项目误提交过四次**（.commit-msg.tmp → commitmsg.txt
+# → msg2.txt → cmsg2.txt），每次都是"换了个名字就漏了"。
+#
+# 结论：靠"逐个列举文件名"是防不住的。现在改成两条一起上：
+#   1) 这里用根目录锚定的宽匹配（以 / 开头 = 只匹配仓库根，不误伤子目录同名文件）
+#   2) 提交时改用 `git commit -F -` 从 stdin 读消息，**根本不落临时文件**
 /commit*.txt
 /msg*.txt
+/cmsg*.txt
 /.commit-msg*
 /.git-commit-msg.txt
 *.tmp

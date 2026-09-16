@@ -78,6 +78,23 @@ async def create_session(body: CreateSessionIn, request: Request) -> SessionOut:
                       status=session.get("status", "active"))
 
 
+@router.get("/sessions")
+async def list_sessions(request: Request, limit: int = 30,
+                        channel: str | None = None) -> dict:
+    """会话列表（"新对话 / 切换对话"用）。
+
+    标题是**第一条用户消息**，不需要用户手动命名 —— 对话类产品里手动命名
+    几乎没人用，而第一句话天然就是这一轮的意图。还没说话的会话 title 为空，
+    前端显示成"（新对话）"。
+
+    ★ 现在没有鉴权层，列出的是**全部**会话，只适用于演示。
+      生产环境必须按登录用户过滤，否则等于把别人的对话列表摊开。
+    """
+    rt = _rt(request)
+    rows = await rt.deps.pg.list_sessions(limit=max(1, min(limit, 100)), channel=channel)
+    return {"sessions": rows, "count": len(rows)}
+
+
 @router.get("/sessions/{session_id}", response_model=dict)
 async def get_session(session_id: str, request: Request, limit: int = 10) -> dict:
     rt = _rt(request)
