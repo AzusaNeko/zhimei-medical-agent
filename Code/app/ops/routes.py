@@ -266,6 +266,8 @@ async def metrics(request: Request, agent: Agent = Depends(current_agent)) -> di
 async def stream(request: Request,
                  once: bool = Query(default=False,
                                     description="只推一帧就结束（轮询型客户端与测试用）"),
+                 include_test: bool = Query(default=False,
+                                            description="是否包含测试工单（与 /tickets 同一个开关）"),
                  agent: Agent = Depends(current_agent)) -> StreamingResponse:
     require(agent, "ticket:read")
     rt = _rt(request)
@@ -277,7 +279,12 @@ async def stream(request: Request,
             for _ in range(ticks):
                 if await request.is_disconnected():
                     break
-                tickets = await service.list_queue(rt, agent, limit=50)
+                # ★ 必须和 /tickets 用**同一个** include_test。
+                #   否则面板上勾了「显示测试工单」，队列里能看到、
+                #   实时推送却看不到 —— 新工单要手动刷新才出现，
+                #   而"实时"两个字正是这个开关存在的意义。
+                tickets = await service.list_queue(rt, agent,
+                                                   include_test=include_test, limit=50)
                 yield _sse("snapshot", {
                     "tickets": [_queue_row(t) for t in tickets],
                     "metrics": await service.metrics(rt, agent),

@@ -381,6 +381,26 @@ let currentUser = null;
 const LS_KEY = "zhimei.currentSession";   // 刷新后回到同一个会话
 const LS_TOKEN = "zhimei.token";
 
+//: 后台轮询间隔（毫秒）。坐席的回复是走另一条链路写进库的（见 startWatch）。
+const WATCH_MS = 3000;
+
+//: 当前会话是否处于人工接管（AI 已停用）。用于在每一轮流式结束后
+//: 决定输入框该不该恢复 —— 否则"接单后 AI 停止回复"这条不变量
+//: 会被 stream() 的 finally 悄悄推翻。
+let takeover = false;
+
+//: 已经画到界面上的最后一条**落库消息**的位置与指纹。
+//: ★ 用它来追加增量，而不是用"条数"或"整段重画"：
+//:   · 用条数会在流式渲染过一轮后对不上（那几条其实也已经落库了），
+//:     结果是把刚流出来的消息**再追加一遍**；
+//:   · 整段重画会**抹掉只存在于前端的元素** —— 最要命的是待确认卡片，
+//:     用户正要点「确认执行」，一次轮询把按钮清了，方案就永远确认不了。
+//:   所以这里记"最后一条落库消息"的指纹，只往后追加，不回头重画。
+let lastIndex = -1;
+let lastSig = null;
+let watchTimer = null;
+const msgSig = (m) => (m.role || "") + "\u0000" + (m.content || "");
+
 /* ══════════════════════════════════════════════════════════════
    认证：令牌存取 + 带令牌的请求封装
    ══════════════════════════════════════════════════════════════ */
@@ -530,6 +550,7 @@ async function afterLogin() {
     greeting();
   }
   $("input").focus();
+  startWatch();   // 坐席的回复靠它主动出现（见 startWatch 的说明）
 }
 
 function logout() {
@@ -538,6 +559,8 @@ function logout() {
   currentUser = null;
   sid = null;
   conversations = [];
+  stopWatch();                 // 没会话了，别让定时器空转
+  lastIndex = -1; lastSig = null; lastSeenTaken = false; takeover = false;
   $("messages").innerHTML = "";
   $("convList").innerHTML = "";
   clearTrace(true);
@@ -615,29 +638,59 @@ async function switchTo(target) {
   await loadConversations();
 }
 
+/** 按角色把一条落库消息画出来。首屏、增量追加、整体重画都走这一个函数，
+ *  免得三套渲染逻辑各写一遍、然后慢慢长得不一样。 */
+function msgNode(m) {
+  const role = m.role || "";
+  if (role === "user") addMsg("user", m.content || "");
+  else if (role === "agent") addMsg("bot", m.content || "", [{text: "坐席", cls: "warn"}]);
+  else if (role === "system") addMsg("sys", m.content || "");
+  else addMsg("bot", m.content || "", [{text: "已审正文", cls: "ok"}]);
+}
+
+/** 输入区可用性。★ 统一走这里，不要在别处直接写 disabled ——
+ *  人工接管期间任何"顺手恢复输入框"的地方都会把接管状态推翻。 */
+function setComposeEnabled(on) {
+  $("input").disabled = !on;
+  $("send").disabled = !on;
+}
+
+let lastSeenTaken = false;   // 上一次同步时的接管状态（用来判断"翻转"）
+
+/** 人工接管状态同步（禁用输入，而不是让用户发出去再收 409）。
+ *
+ *  ★ 只在**状态翻转**时插一条系统提示。每轮轮询都插一次的话，
+ *    对话区会被同一句话刷屏。
+ */
+function syncTakeover(taken, initial) {
+  setComposeEnabled(!taken);
+  takeover = taken;
+  if (taken && !lastSeenTaken) {
+    addMsg("sys", "该会话已由人工客服接管，AI 已停用。你的消息会直接进入人工队列。",
+           [{text: "人工接管", cls: "warn"}]);
+  } else if (!taken && lastSeenTaken && !initial) {
+    setStatus("人工客服已结束接管，AI 已恢复自动回复");
+    setTimeout(() => { if (!takeover) setStatus(""); }, 4000);
+  }
+  lastSeenTaken = taken;
+}
+
+/** 记下"已经画到哪儿了"，供增量追加用。 */
+function markSeen(msgs) {
+  lastIndex = msgs.length - 1;
+  lastSig = msgs.length ? msgSig(msgs[msgs.length - 1]) : null;
+}
+
 function renderHistory(d) {
   const msgs = d.messages || [];
   const sess = d.session || {};
+  $("messages").innerHTML = "";
   if (!msgs.length) {
     addMsg("sys", "这是一个还没有对话记录的空会话。", [{text: "空会话", cls: ""}]);
   }
-  for (const m of msgs) {
-    const role = m.role || "";
-    if (role === "user") addMsg("user", m.content || "");
-    else if (role === "agent") addMsg("bot", m.content || "", [{text: "坐席", cls: "warn"}]);
-    else if (role === "system") addMsg("sys", m.content || "");
-    else addMsg("bot", m.content || "", [{text: "已审正文", cls: "ok"}]);
-  }
-  // 人工接管状态：直接禁用输入，而不是让用户发出去再收 409
-  if (sess.ai_enabled === false) {
-    addMsg("sys", "该会话已由人工客服接管，AI 已停用。你的消息会直接进入人工队列。",
-           [{text: "人工接管", cls: "warn"}]);
-    $("input").disabled = true;
-    $("send").disabled = true;
-  } else {
-    $("input").disabled = false;
-    $("send").disabled = false;
-  }
+  for (const m of msgs) msgNode(m);
+  markSeen(msgs);
+  syncTakeover(sess.ai_enabled === false, true);
 }
 
 /** 新对话：不预先建会话（免得留下一堆空会话），发第一条消息时才建。 */
@@ -645,10 +698,12 @@ function newChat() {
   if (busy) return;
   sid = null;
   localStorage.removeItem(LS_KEY);
+  // 新会话没有历史可对齐，把"已看到的位置"和接管状态一起清掉，
+  // 免得把上一个会话的位置带到新会话上
+  lastIndex = -1; lastSig = null; lastSeenTaken = false; takeover = false;
   $("sidLabel").textContent = "新对话";
   $("messages").innerHTML = "";
-  $("input").disabled = false;
-  $("send").disabled = false;
+  setComposeEnabled(true);
   setStatus("");
   clearConfirm();
   clearTrace(true);
@@ -790,6 +845,96 @@ function finishTrace(ok) {
 }
 
 /* ── SSE 解析（用 fetch + reader：EventSource 不能带自定义头，也无法 POST）── */
+/* ══════════════════════════════════════════════════════════════
+   后台轮询：坐席的回复要能**主动**出现在用户这一侧
+   ══════════════════════════════════════════════════════════════
+
+   ★ 为什么必须轮询：聊天走的是「POST + 一轮一条 SSE」，那条流是**一轮对话**
+     的流，一轮结束就断了。而坐席回复走的是**另一条链路**
+     （`POST /ops/tickets/{id}/reply`），它只往库里写一条 `role='agent'`
+     的消息 —— 用户这一侧没有任何东西会被告知。
+     不轮询的话，用户必须手动刷新才能看到坐席的回复，而这恰恰是"人工接管"
+     这个功能最要紧的时刻（用户刚被告知"马上有人来"，然后对着一个
+     永远不动的界面发呆）。
+
+   ★ 什么时候不轮询：
+     · `busy` —— 正在流式收正文。此时界面在实时更新，插一脚会重复渲染。
+     · 页面在后台标签页 —— 看不见的内容不值得请求。
+     · 没有会话（新对话还没发第一条消息）—— 没有可拉的东西。
+*/
+function startWatch() {
+  if (watchTimer) return;
+  watchTimer = setInterval(watchOnce, WATCH_MS);
+}
+
+function stopWatch() {
+  if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+}
+
+async function watchOnce() {
+  if (busy || !sid || document.hidden) return;
+  let d;
+  try {
+    const r = await api("/api/sessions/" + sid + "?limit=60");
+    if (!r.ok) return;
+    d = await r.json();
+  } catch (e) {
+    return;   // 网络抖动不在对话区里刷错误，下一轮自己会好
+  }
+  try {
+    await applyPoll(d);
+  } catch (e) {
+    // ★ 轮询是后台行为，任何异常都不能冒成 unhandled rejection ——
+    //   setInterval 不会 await 它，没人接得住，而后果是整条定时器链悄悄失效。
+    console.warn("[C端] 轮询处理失败：", e);
+  }
+}
+
+/** 把一次轮询的结果落到界面上（分离出来只为让上面的 catch 兜得住）。 */
+async function applyPoll(d) {
+  const msgs = d.messages || [];
+  const taken = (d.session || {}).ai_enabled === false;
+
+  // 没有任何变化就什么都不做（绝大多数轮询都走到这里）
+  const sameTail = lastIndex >= 0 && lastIndex < msgs.length &&
+                   msgSig(msgs[lastIndex]) === lastSig;
+  if (sameTail && msgs.length === lastIndex + 1 && taken === lastSeenTaken) return;
+
+  if (!sameTail) {
+    // 和记忆里的位置对不上（换了会话、消息被清、或上一轮没对齐）——
+    // 整体重画。★ 但用户正停在待确认卡片上时不能重画：那会把
+    // 「确认执行」按钮抹掉，方案就再也确认不了了。
+    if (pendingPlan) return;
+    renderHistory(d);
+  } else {
+    for (const m of msgs.slice(lastIndex + 1)) msgNode(m);
+    markSeen(msgs);
+    syncTakeover(taken, false);
+    $("messages").scrollTop = $("messages").scrollHeight;
+  }
+  await loadConversations();   // 会话列表上的"人工接管"角标也要跟着变
+}
+
+/** 一轮对话结束后，把"已看到"的位置对齐到库里。
+ *
+ *  ★ 流式渲染出来的那几条消息**也已经落库了**。如果不对齐，
+ *    下一轮轮询会把它们当成新消息**再追加一遍**（对话区出现重复）。
+ *    这里只更新位置与接管状态，不重画 —— 界面上的内容已经是新的了，
+ *    重画还会丢掉流式那一条带的凭据角标。
+ */
+async function resyncSeen() {
+  if (!sid) return;
+  try {
+    const r = await api("/api/sessions/" + sid + "?limit=60");
+    if (!r.ok) return;
+    const d = await r.json();
+    const msgs = d.messages || [];
+    markSeen(msgs);
+    lastSeenTaken = takeover;                 // 防止 syncTakeover 误报"刚被接管"
+    syncTakeover((d.session || {}).ai_enabled === false, true);
+  } catch (e) { /* 对齐失败不致命：下一轮轮询发现对不上会整体重画 */ }
+}
+
 async function stream(path, body) {
   const useTrace = $("traceOn").checked;
   const url = path + (useTrace ? "?trace=1" : "");
@@ -836,8 +981,14 @@ async function stream(path, body) {
   } finally {
     setStatus("");
     setConn("on", "已连接");
+    // ★ 先把"已看到的位置"对齐到库里，**再**放开 busy：
+    //   放在 busy 之后的话，轮询会在这一小段窗口里发现"库里有新消息"，
+    //   把刚刚流式渲染过的两条再追加一遍。
+    await resyncSeen();
     busy = false;
-    $("send").disabled = false;
+    // ★ 不能无条件把输入框放开：人工接管期间放开，用户就能继续对着
+    //   一个"AI 已停用"的会话发消息，然后收一个 409。
+    setComposeEnabled(!takeover);
     finishTrace(ok);
   }
   return ok;
@@ -890,6 +1041,12 @@ function handle(name, d) {
              String(d.ticket_id || "").slice(0, 8) + "… 优先级 " + (d.priority || ""), [
         {text: "转人工", cls: "warn"}, "原因 " + (d.reason || "")
       ]);
+      // ★ 当场就把输入框关掉，不等下一轮轮询。这一刻用户已经被明确告知
+      //   "AI 已停用、马上有人来" —— 界面必须同步，否则他会继续对着
+      //   AI 提问，然后收到 409，体验上像是坏了。
+      //   先置 lastSeenTaken 再 sync，避免轮询又把同一句提示插一遍。
+      lastSeenTaken = takeover;
+      syncTakeover(true, true);
       return true;
     case "blocked":
       addMsg("err", "本次内容被硬性阻断，未产生任何业务出站内容。命中规则：" +
@@ -961,20 +1118,48 @@ fetch("/api/health").then((r) => r.json()).then((h) => {
 // ★ 先验令牌、再决定进哪个界面。
 //   顺序不能反：没登录就去拉会话列表，只会拿到 401 再被弹回登录页 ——
 //   用户会看到界面闪一下才跳走。
+//
+// ★ 和坐席台同一条约定：**只有 401 / 403 才算"没登录"**。
+//   原来这里是 `if (!r.ok) { setToken(""); showAuth("请先登录"); }` ——
+//   后端一个 500 也会被当成"请先登录"，把好端端的令牌删掉。
 (async function boot() {
   const t = getToken();
   if (!t) { showAuth(); return; }
+
+  let r;
   try {
-    const r = await fetch("/api/auth/me", {headers: {Authorization: "Bearer " + t}});
-    if (!r.ok) { setToken(""); showAuth("请先登录"); return; }
-    const d = await r.json();
-    currentUser = d.user;
+    r = await fetch("/api/auth/me", {headers: {Authorization: "Bearer " + t}});
+  } catch (e) {
+    // 连不上 ≠ 没登录：令牌留着，连上以后刷新即可恢复
+    setConn("", "离线");
     hideAuth();
-    await afterLogin();
+    addMsg("err", "连不上服务（" + e.message + "）。令牌已保留，恢复后刷新页面即可。");
+    return;
+  }
+  if (r.status === 401 || r.status === 403) {
+    setToken("");
+    showAuth("登录已过期，请重新登录");
+    return;
+  }
+  if (!r.ok) {
+    setConn("", "离线");
+    hideAuth();
+    addMsg("err", "服务返回 HTTP " + r.status + "，令牌已保留，稍后刷新重试。");
+    return;
+  }
+
+  let d;
+  try {
+    d = await r.json();
   } catch (e) {
     setConn("", "离线");
-    showAuth("无法连接服务，请稍后重试");
+    hideAuth();
+    addMsg("err", "响应不是合法 JSON：" + e.message);
+    return;
   }
+  currentUser = d.user;
+  hideAuth();
+  await afterLogin();
 })();
 </script>
 </body>

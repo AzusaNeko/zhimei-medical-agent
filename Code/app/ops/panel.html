@@ -253,16 +253,38 @@ function logout() {
 }
 
 async function bootData() {
-  await loadQueue();
-  await loadMetrics();
-  connectStream();
+  // ★ 每一步各**自**兜住异常。原来这里是 `connectStream()` —— 一个拼错的
+  //   函数名（真名是 `connect`），抛出的 ReferenceError 一路冒到 start()
+  //   的 catch，被当成"无法连接服务"，于是**每次刷新都弹回登录页**，
+  //   而队列和指标其实都加载好了。
+  //   一个拼写错误之所以能伪装成"登录失效"，就是因为这几步没有隔离：
+  //   任何一步抛错，后面每一步都不会执行，最后的错误还归错到了认证上。
+  try { await loadQueue(); } catch (e) { console.error("[坐席台] 队列加载失败", e); }
+  try { await loadMetrics(); } catch (e) { console.error("[坐席台] 指标加载失败", e); }
+  try { connect(); } catch (e) { console.error("[坐席台] 实时流启动失败", e); }
+}
+
+/** 令牌校验这一步没通过，但**不能**据此断定用户没登录。
+ *
+ *  ★ 只有 401 / 403 才等于"令牌不可用"。网络抖动、后端 500、以及前端
+ *    自己的一个 bug，都会走到这里 —— 那些情况下把令牌删掉、弹登录页，
+ *    等于替用户做了"重新登录"的决定，而且**真正的原因永远看不到**。
+ *    所以这里保留令牌、如实报错，用户点【刷新】就能重试。
+ */
+function keepTokenBoot(msg) {
+  hideAuth();                       // 令牌还在，不弹登录页（否则误导用户去重新登录）
+  console.error("[坐席台] 启动校验未通过：" + msg);
+  toast(msg + " —— 令牌已保留，点【刷新】可重试", true);
+  $("agentName").textContent = "（未校验）";
+  $("agentRole").textContent = "?";
 }
 
 document.getElementById("loginForm").addEventListener("submit", doLogin);
 document.getElementById("logout").onclick = logout;
 document.getElementById("purgeTest").onclick = purgeTest;
-// 切换"显示测试工单"时重新拉队列；不动当前详情（用户可能正在看某张工单）
-document.getElementById("showTest").onchange = () => loadQueue();
+// 切换"显示测试工单"时重新拉队列；不动当前详情（用户可能正在看某张工单）。
+// 实时流也要跟着重连：它自带 include_test 查询串，不重连就还是旧的口径。
+document.getElementById("showTest").onchange = () => { loadQueue(); connect(); };
 let toastTimer;
 function toast(text, isAlert) {
   const el = $("toast");
@@ -482,9 +504,27 @@ function renderMetrics(m) {
 }
 
 // ── 实时流（fetch + reader，因为 EventSource 不能带自定义头）──
+// `streamAbort` 用来在切换「显示测试工单」时**主动断开**上一条流：
+// 查询串变了就必须重连，否则勾选框只影响一次性拉取、不影响推送。
+let streamAbort = null;
+
 async function connect() {
+  if (streamAbort) { try { streamAbort.abort(); } catch (e) { /* 已断开 */ } }
+  const ac = new AbortController();
+  streamAbort = ac;
+  const inc = $("showTest").checked ? "true" : "false";
   try {
-    const r = await fetch("/ops/stream", { headers: headers() });
+    const r = await fetch("/ops/stream?include_test=" + inc,
+                          { headers: headers(), signal: ac.signal });
+    // 令牌真的失效了就别再无脑重连：每 3 秒撞一次 401，界面上只显示
+    // "实时断开"，用户完全不知道要去重新登录。
+    if (r.status === 401 || r.status === 403) {
+      localStorage.removeItem("zhimei.agentToken");
+      $("connDot").className = "dot";
+      $("connText").textContent = "未登录";
+      showAuth("登录已过期，请重新登录");
+      return;
+    }
     if (!r.ok || !r.body) throw new Error("stream unavailable");
     $("connDot").className = "dot on";
     $("connText").textContent = "实时已连接";
@@ -501,6 +541,9 @@ async function connect() {
     }
     throw new Error("stream closed");
   } catch (e) {
+    // 主动断开（切换勾选框触发的重连）不是故障，别报"断开"也别重连 ——
+    // 新的那条流已经由 connect() 自己建好了。
+    if (ac.signal.aborted) return;
     $("connDot").className = "dot";
     $("connText").textContent = "实时断开，3 秒后重连";
     setTimeout(connect, 3000);
@@ -535,21 +578,42 @@ async function loadMetrics() {
 
 // ★ 先验令牌再干活。没登录就去拉队列只会拿到 401 再被弹回登录页，
 //   用户会看到界面闪一下才跳走。
+//
+// ★ 关键约定：**只有 401 / 403 才算"没登录"**。其它一切异常（网络不通、
+//   500、响应不是 JSON、启动过程里某个函数拼错）都保留令牌并如实报出来。
+//   这条约定是踩出来的：原来这里用一个大 try/catch 包住"校验 + 全部初始化"，
+//   结果 `bootData()` 里一个拼错的函数名让每次刷新都跳登录页，
+//   而排查方向被"登录"两个字带偏了很久。
 (async function start() {
   const t = localStorage.getItem("zhimei.agentToken");
   if (!t) { showAuth(); return; }
+
+  let r;
   try {
-    const r = await fetch("/ops/auth/me", {headers: {Authorization: "Bearer " + t}});
-    if (!r.ok) { localStorage.removeItem("zhimei.agentToken"); showAuth(); return; }
-    const d = await r.json();
-    me = d.agent;
-    myPerms = d.permissions || [];
-    applyIdentity();
-    hideAuth();
-    await bootData();
+    r = await fetch("/ops/auth/me", {headers: {Authorization: "Bearer " + t}});
   } catch (e) {
-    showAuth("无法连接服务，请稍后重试");
+    keepTokenBoot("连不上服务（" + e.message + "）");
+    return;
   }
+  if (r.status === 401 || r.status === 403) {
+    localStorage.removeItem("zhimei.agentToken");
+    showAuth("登录已过期，请重新登录");
+    return;
+  }
+  if (!r.ok) { keepTokenBoot("服务返回 HTTP " + r.status); return; }
+
+  let d;
+  try {
+    d = await r.json();
+  } catch (e) {
+    keepTokenBoot("响应不是合法 JSON（" + e.message + "）");
+    return;
+  }
+  me = d.agent;
+  myPerms = d.permissions || [];
+  applyIdentity();
+  hideAuth();
+  await bootData();
 })();
 </script>
 </body>

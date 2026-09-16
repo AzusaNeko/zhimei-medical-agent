@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -37,6 +38,8 @@ from .security import current_user
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
                      EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch,
                      node_detail, ping, sse)
+
+logger = logging.getLogger("zhimei.api")
 from .schemas import ChatIn, ConfirmIn, CreateSessionIn, HealthOut, MessageOut, SessionOut
 
 router = APIRouter(prefix="/api")
@@ -263,6 +266,7 @@ async def _event_source(rt: Runtime, session_id: str,
         yield sse(EVENT_DONE, {"session_id": session_id, "turn_id": turn_id})
     except GraphRecursionError:
         # 步数上限不是 500 —— 它是"图没能在预算内收敛"，必须转人工
+        logger.warning("图步数超上限（session=%s），已兜底转人工", session_id)
         ticket = await _force_handoff(rt, session_id, reason="recursion_limit", priority="P1")
         yield sse(EVENT_HANDOFF, ticket)
         yield sse(*error_event("recursion_limit", "处理步数超出上限，已转人工"))
@@ -278,7 +282,14 @@ async def _event_source(rt: Runtime, session_id: str,
         #
         #   这与项目里其它地方的取向是一致的（"审查失败绝不能当成通过 → 转人工"）：
         #   宁可多转一次人工，也不要让用户对着空气说话。
-        #   error 事件照旧发出，异常类型与信息不丢，运营侧仍然看得见问题。
+        #
+        # ★ 但"运营侧看得见"这件事**不能只靠 SSE 流**：那条流是给用户看的，
+        #   而异常发生在服务端。这里曾经只发 error 事件、**不打日志**，
+        #   后果是一次真实的服务端异常在服务端日志里查无此事 ——
+        #   只有恰好盯着浏览器事件流的人才知道出过错。
+        #   所以下面这行 logger.exception 是必需的，不是可选的：
+        #   它保证异常类型、消息和**完整调用栈**都落在服务端日志里。
+        logger.exception("图执行异常，已兜底转人工（session=%s）", session_id)
         ticket = await _force_handoff(rt, session_id, reason="internal_error", priority="P1")
         yield sse(EVENT_HANDOFF, ticket)
         yield sse(*error_event("internal", f"{type(exc).__name__}: {exc}"))

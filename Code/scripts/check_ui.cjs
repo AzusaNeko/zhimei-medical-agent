@@ -31,8 +31,9 @@ const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 let fail = 0;
+let pass = 0;
 const check = (name, ok, detail = '') => {
-  if (!ok) fail++;
+  if (ok) pass++; else fail++;
   console.log(`  ${ok ? '✓' : '✗'} ${name}${ok || !detail ? '' : '   —— ' + detail}`);
 };
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
@@ -192,7 +193,231 @@ check('测试工单行上有「测试」徽章',
       /\.badge\.test/.test(panelHtml) && /is_test \? '<span class="badge test">/.test(panelJs),
       '没有徽章，勾选后仍分不清哪张是测试的');
 
-console.log(`\n${'═'.repeat(56)}`);
-console.log(`失败 ${fail} 项`);
-console.log('═'.repeat(56));
-process.exit(fail ? 1 : 0);
+// E8 ★ 服务端异常必须留日志。
+//    这条也是踩出来的：图执行抛异常时只发了一个 SSE error 事件、**没有打日志**，
+//    于是服务端日志里查无此事 —— 只有恰好盯着浏览器事件流的人才知道出过错。
+//    error 事件是发给**用户**的，不能顶替给运维的记录。
+const apiRoutes = read('app/api/routes.py');
+check('图执行异常会写服务端日志（logger.exception）',
+      /logger\.exception\(/.test(apiRoutes),
+      'routes.py 里没有 logger.exception —— 服务端异常在日志里将查无此事');
+
+// ── F. 两个页面在"已登录 + 刷新"下必须真的能启动 ──
+//
+// ★ 这一节是踩出来的，不是预防性设计。`bootData()` 里写了一个
+//   `connectStream()`，而函数真名是 `connect` —— 抛出的 ReferenceError
+//   被 start() 的大 try/catch 吞掉，界面上表现为**每次刷新都弹回登录页**，
+//   而队列其实加载得好好的。排查方向被"登录"两个字带偏了很久。
+//
+//   A~E 全是静态文本扫描，抓不到这种东西：语法没错、id 都在、
+//   函数名也在别处定义了。只有**真的把脚本跑一遍**才能发现。
+//
+//   所以这里给一个最小 DOM 桩 + 假 fetch，在两个页面各自的
+//   "已登录、正在刷新"状态下把脚本完整执行一次，然后看：
+//     · 登录层是不是保持隐藏（= 页面没把自己当成未登录）
+//     · 启动过程有没有 console.error（两页的启动失败都会走这里）
+//     · 面板有没有真的去连实时流（守住 connect 被调用）
+console.log('\nF. 页面启动（桩环境里真跑一遍脚本）');
+
+const newEl = (id, onText) => {
+  const e = {
+    id, hidden: false, innerHTML: '', className: '', value: '',
+    checked: false, disabled: false, title: '', onclick: null, onchange: null,
+    style: {}, dataset: {}, children: [], parentNode: null,
+    scrollTop: 0, scrollHeight: 0, clientHeight: 0, offsetHeight: 0,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    addEventListener() {}, appendChild(c) { this.children.push(c); },
+    removeChild() {}, remove() {}, insertBefore() {}, replaceChildren() {},
+    focus() {}, blur() {}, click() {},
+    setAttribute() {}, getAttribute: () => null,
+    querySelector: () => null, querySelectorAll: () => [],
+    getContext: () => ({ measureText: () => ({ width: 0 }), fillText() {}, fillRect() {}, clearRect() {} }),
+  };
+  // textContent 用带记录的 setter：这样"某条消息有没有被画出来"可断言
+  let text = '';
+  Object.defineProperty(e, 'textContent', {
+    get: () => text,
+    set: (v) => { text = String(v); if (onText) onText(text); },
+  });
+  return e;
+};
+
+/** 跑一个页面的脚本。返回 {els, seen, errors, logged, texts, intervals} */
+async function bootPage(html, { token, routes, local }) {
+  const declared = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+  const els = new Map();
+  const texts = [];        // 所有被写进 textContent / createTextNode 的文字
+  const record = (t) => texts.push(String(t));
+  const document = {
+    title: '', hidden: false,
+    getElementById(id) {
+      if (!declared.has(id)) return null;   // 和浏览器一致：引用不存在的 id 会抛错
+      if (!els.has(id)) els.set(id, newEl(id, record));
+      return els.get(id);
+    },
+    createElement: (t) => newEl(t, record),
+    createTextNode: (t) => { record(t); return newEl('#text', record); },
+    addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
+    body: newEl('body', record), documentElement: newEl('html', record),
+  };
+  const store = new Map([['zhimei.token', token], ['zhimei.agentToken', token]]);
+  for (const [k, v] of Object.entries(local || {})) store.set(k, String(v));
+  const localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  const seen = [];
+  const logged = [];
+  const intervals = [];    // 捕获 setInterval 的回调，供测试手动触发一次
+  // 假服务：不发真请求，全部返回预置 JSON。/ops/stream 给一条**永不结束**的流，
+  // 这样 connect() 会停在 read() 上（像真浏览器一样），不会反复重连刷屏。
+  const fetchStub = async (url) => {
+    const u = String(url);
+    seen.push(u);
+    if (u.includes('/ops/stream')) {
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }
+    const hit = Object.keys(routes).find((k) => u.includes(k));
+    const body = hit ? routes[hit] : {};
+    return new Response(JSON.stringify(body),
+                        { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const errors = [];
+  const ctx = {
+    document, localStorage, fetch: fetchStub,
+    console: { log() {}, warn() {}, error: (...a) => logged.push(a.join(' ')) },
+    setTimeout: () => 0, clearTimeout() {},
+    setInterval: (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; },
+    clearInterval() {},
+    JSON, Math, Date, TextDecoder, TextEncoder, Response, Request, Headers,
+    ReadableStream, AbortController, URL, URLSearchParams,
+    confirm: () => false, alert() {}, prompt: () => null,
+    location: { href: 'http://127.0.0.1:8090/', reload() {} },
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.self = ctx;
+  const js = scriptOf(html);
+  try {
+    vm.createContext(ctx);
+    new vm.Script(js).runInContext(ctx);
+  } catch (e) {
+    errors.push('同步抛错: ' + e.message);
+  }
+  await new Promise((r) => setTimeout(r, 60));   // 等启动里的 await 链走完
+  return { els, seen, errors, logged, texts, intervals, routes };
+}
+
+const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
+
+(async () => {
+  // ── F1 坐席台：刷新后不该弹回登录页，且必须去连实时流 ──
+  const panel = await bootPage(panelHtml, {
+    token: TOKEN,
+    routes: {
+      '/ops/auth/me': { agent: { agent_id: 'a1', name: '客服小美', role: 'service' },
+                        permissions: ['ticket:read'], sees_raw_pii: false },
+      '/ops/tickets': { agent: { agent_id: 'a1' }, tickets: [], include_test: false },
+      '/ops/metrics': { tickets_total: 0, tickets_open: 0, review_rounds: 0, hard_rule_top: [] },
+    },
+  });
+  check('panel.html 刷新后不弹回登录页（令牌有效时）',
+        panel.els.get('authLayer') && panel.els.get('authLayer').hidden === true,
+        '登录层显示了：说明启动过程里抛错并被当成"未登录"');
+  check('panel.html 启动时真的去连了实时流 /ops/stream',
+        panel.seen.some((u) => u.includes('/ops/stream')),
+        '没请求过 /ops/stream —— 实时流没接上，新工单不会自动出现（曾因函数名拼错踩过）');
+  check('panel.html 启动过程没有 console.error',
+        panel.logged.length === 0, panel.logged.join(' | ').slice(0, 160));
+  check('panel.html 启动过程没有抛错', panel.errors.length === 0, panel.errors.join(' | '));
+
+  // ── F2 C 端：刷新后不该弹回登录页；带一个"人工接管中"的会话 ──
+  const SID = '11111111-2222-3333-4444-555555555555';
+  const chat = await bootPage(chatHtml, {
+    token: TOKEN,
+    local: { 'zhimei.currentSession': SID },   // 刷新后回到上次那个会话
+    routes: {
+      '/api/health': { profile: 'fake', checkpointer: 'memory' },
+      '/api/auth/me': { user: { user_id: 'u1', display_name: '演示用户',
+                                email: 'demo@zhimei.test' } },
+      ['/api/sessions/' + SID]: {
+        session: { session_id: SID, ai_enabled: false },
+        messages: [
+          { role: 'user', content: '我做完水光第三天，脸发白还特别疼' },
+          { role: 'assistant', content: '请尽快到院急诊。' },
+          { role: 'agent', content: '您好，我是值班客服小美，正在为您登记。' },
+        ],
+      },
+      '/api/sessions': { sessions: [{ session_id: SID, title: '术后不适',
+                                      ai_enabled: false, message_count: 3 }] },
+    },
+  });
+  check('chat.html 刷新后不弹回登录页（令牌有效时）',
+        chat.els.get('authLayer') && chat.els.get('authLayer').hidden === true,
+        '登录层显示了：说明启动过程里抛错并被当成"未登录"');
+  check('chat.html 启动过程没有 console.error',
+        chat.logged.length === 0, chat.logged.join(' | ').slice(0, 160));
+  check('chat.html 启动过程没有抛错', chat.errors.length === 0, chat.errors.join(' | '));
+
+  // 人工接管中的会话：输入框必须禁用（不能让用户发出去再收 409）
+  const input = chat.els.get('input');
+  check('chat.html 打开"人工接管中"的会话会禁用输入框',
+        input && input.disabled === true,
+        '输入框仍是可用的 —— 用户会发出去然后收到 409');
+
+  // ── F3 轮询：坐席回复必须能**主动**出现在用户这一侧 ──
+  //
+  //  ★ 这是这次报的第二个问题：坐席回复走的是另一条链路
+  //    （/ops/tickets/{id}/reply 直接写库），用户这一侧的 SSE 早就断了，
+  //    没有任何东西会通知他 —— 不轮询就只能手动刷新。
+  //
+  //  这里做的是**行为测试**而不是文本检查：先让"服务端"只有一条用户消息，
+  //  启动页面，然后模拟坐席在这期间回复（改掉桩数据 + 把会话置为人工接管），
+  //  手动触发一次轮询定时器，看这条回复有没有被画到界面上、输入框有没有被禁用。
+  const w = await bootPage(chatHtml, {
+    token: TOKEN,
+    local: { 'zhimei.currentSession': SID },
+    routes: {
+      '/api/health': { profile: 'fake', checkpointer: 'memory' },
+      '/api/auth/me': { user: { display_name: '演示用户' } },
+      ['/api/sessions/' + SID]: {
+        session: { session_id: SID, ai_enabled: true },
+        messages: [{ role: 'user', content: '我做完水光第三天，脸发白还特别疼' }],
+      },
+      '/api/sessions': { sessions: [{ session_id: SID, title: '术后不适', ai_enabled: true }] },
+    },
+  });
+  const poller = w.intervals.find((i) => i.fn);
+  check('chat.html 注册了轮询定时器',
+        Boolean(poller), '没有 setInterval —— 坐席回复不可能自动出现');
+
+  if (poller) {
+    const AGENT_TEXT = '您好，我是值班客服小美，已经帮您登记，请尽快到院。';
+    // 模拟坐席这一刻的回复 + 接单（接单会把 ai_enabled 置 false）
+    w.routes['/api/sessions/' + SID] = {
+      session: { session_id: SID, ai_enabled: false },
+      messages: [
+        { role: 'user', content: '我做完水光第三天，脸发白还特别疼' },
+        { role: 'assistant', content: '请尽快到院急诊。' },
+        { role: 'agent', content: AGENT_TEXT },
+      ],
+    };
+    const before = w.seen.filter((u) => u.includes('/api/sessions/' + SID)).length;
+    await poller.fn();
+    const after = w.seen.filter((u) => u.includes('/api/sessions/' + SID)).length;
+    check('一次轮询会去拉当前会话', after > before, `拉取次数没变（${before} → ${after}）`);
+    check('坐席的回复被画到了对话区（无需手动刷新）',
+          w.texts.some((t) => t.includes('值班客服小美')),
+          '界面上找不到坐席那句话');
+    check('坐席接单后输入框被禁用（不能发出去再收 409）',
+          w.els.get('input') && w.els.get('input').disabled === true,
+          '输入框仍然可用');
+    check('已经画过的消息不会被重复追加',
+          w.texts.filter((t) => t.includes('脸发白还特别疼')).length === 1,
+          `用户那句话出现了 ${w.texts.filter((t) => t.includes('脸发白还特别疼')).length} 次`);
+  }
+
+  console.log(`\n${'═'.repeat(56)}`);
+  console.log(`通过 ${pass} 项，失败 ${fail} 项`);
+  console.log('═'.repeat(56));
+  process.exit(fail ? 1 : 0);
+})();
