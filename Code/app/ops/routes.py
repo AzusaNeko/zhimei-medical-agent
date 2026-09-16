@@ -32,7 +32,8 @@ from pydantic import BaseModel, Field
 from ..graph.progress import STAGE_TEXT  # noqa: F401  (保持与聊天侧同一个文案源)
 from ..runtime import Runtime
 from . import service
-from .deps import PERMISSIONS, Agent, AgentLoginIn, current_agent, require
+from .deps import (PERMISSIONS, PURGE_PERMISSION, Agent, AgentLoginIn, current_agent,
+                   effective_permissions, require)
 
 router = APIRouter(prefix="/ops")
 
@@ -87,14 +88,15 @@ async def agent_login(body: AgentLoginIn, request: Request) -> dict:
         user_id=str(row["agent_id"]), role=role, name=str(row.get("name") or "")))
     return {"access_token": token, "token_type": "Bearer", "expires_in": ttl,
             "agent": {"agent_id": row["agent_id"], "name": row.get("name"), "role": role},
-            # 前端据此决定显示哪些按钮；真正的权限判定仍在服务端
-            "permissions": sorted(PERMISSIONS.get(role, set()))}
+            # 展开成具体权限名（admin 的 {"*"} 会展开成完整清单），
+            # 前端据此决定显示哪些按钮；真正的判定仍在服务端
+            "permissions": effective_permissions(role)}
 
 
 @router.get("/auth/me")
 async def agent_me(agent: Agent = Depends(current_agent)) -> dict:
     return {"agent": {"agent_id": agent.agent_id, "name": agent.name, "role": agent.role},
-            "permissions": sorted(PERMISSIONS.get(agent.role, set())),
+            "permissions": effective_permissions(agent.role),
             "sees_raw_pii": agent.sees_raw_pii}
 
 
@@ -132,13 +134,35 @@ class MisreportIn(BaseModel):
 async def list_tickets(request: Request,
                        status: list[str] | None = Query(default=None),
                        priority: list[str] | None = Query(default=None),
+                       include_test: bool = Query(default=False,
+                                                  description="是否包含测试工单（channel=test）"),
                        limit: int = 50,
                        agent: Agent = Depends(current_agent)) -> dict:
     require(agent, "ticket:read")
     rt = _rt(request)
-    rows = await service.list_queue(rt, agent, statuses=status, priorities=priority, limit=limit)
+    rows = await service.list_queue(rt, agent, statuses=status, priorities=priority,
+                                    include_test=include_test, limit=limit)
     return {"agent": {"agent_id": agent.agent_id, "name": agent.name, "role": agent.role},
-            "tickets": rows}
+            "tickets": rows, "include_test": include_test}
+
+
+@router.delete("/tickets/test")
+async def purge_test_tickets(request: Request,
+                             agent: Agent = Depends(current_agent)) -> dict:
+    """清掉**全部测试工单**（`is_test = true`）。
+
+    ★ 只删测试工单，绝不动真实工单 —— 这是这个端点存在的唯一理由。
+      之前用一条手写 SQL 清库，那条 SQL 不区分测试与真实，一旦有人在
+      真实环境里手滑执行，顾客的工单就没了。把"只删测试"做成代码里的
+      硬约束，比写在运维手册里可靠。
+
+    ★ 需要 admin：清库是不可逆操作，不该让普通坐席随手能做。
+    """
+    require(agent, PURGE_PERMISSION)
+    rt = _rt(request)
+    removed = await rt.deps.pg.purge_test_tickets()
+    return {"removed": removed, "by": agent.agent_id,
+            "message": f"已清理 {removed} 张测试工单（真实工单未受影响）"}
 
 
 @router.get("/tickets/{ticket_id}")

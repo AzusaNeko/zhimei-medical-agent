@@ -63,6 +63,15 @@ DEMO_EMAIL = "demo@zhimei.test"
 DEMO_PASSWORD = "zhimei-demo-2026"
 SERVICE_EMAIL = "service@zhimei.test"
 
+#: ★ 测试脚本必须用**专用渠道**建会话，不能借用真实渠道名（web / wechat / app）。
+#:
+#:   原来这里用的是 "web"，后果是测试造的工单和真实顾客的工单**无法区分** ——
+#:   几十张测试工单混进队列，坐席打开面板分不清哪张是眼前这位顾客的，
+#:   SLA 指标（超时率、平均等待）也被污染。
+#:   现在工单创建时会读会话的 channel，是 "test" 就打上 is_test 标记，
+#:   队列默认把它们过滤掉；要看时前端有勾选框，行上也有"测试"徽章。
+TEST_CHANNEL = "test"
+
 
 async def setup_auth(client: httpx.AsyncClient) -> tuple[bool, str]:
     """登录顾客与坐席，把令牌装到默认头与 OPS_HEADERS 上。
@@ -223,7 +232,7 @@ async def main() -> int:
         if health.get("profile") != "real":
             print("    （当前是 fake 档位：跳过依赖真实库与真实模型的断言）")
 
-        r = await client.post("/api/sessions", json={"channel": "web"})
+        r = await client.post("/api/sessions", json={"channel": TEST_CHANNEL})
         check("POST /api/sessions 建会话", r.status_code == 200, f"HTTP {r.status_code}")
         sid = (r.json() or {}).get("session_id")
         check("返回了 session_id", bool(sid))
@@ -270,7 +279,7 @@ async def main() -> int:
         if True:
             # 3.1 错误哈希不得执行
             s_t = (await client.post("/api/sessions",
-                                     json={"channel": "web"})).json()["session_id"]
+                                     json={"channel": TEST_CHANNEL})).json()["session_id"]
             _, _, ev1 = await sse(client, "POST", f"/api/chat/{s_t}/stream",
                                   {"text": "帮我把热玛吉的预约改到浦东店周五下午"})
             report_errors(ev1)
@@ -297,7 +306,7 @@ async def main() -> int:
 
             # 3.2 正确哈希 → 真的执行
             s_ok = (await client.post("/api/sessions",
-                                      json={"channel": "web"})).json()["session_id"]
+                                      json={"channel": TEST_CHANNEL})).json()["session_id"]
             _, _, ev2 = await sse(client, "POST", f"/api/chat/{s_ok}/stream",
                                   {"text": "帮我把热玛吉的预约改到浦东店周五下午"})
             report_errors(ev2)
@@ -318,7 +327,7 @@ async def main() -> int:
 
         # ══════════════ 4 人工接管不变量（跨模块）══════════════
         section("4. 人工接管：坐席接单后 AI 必须停止自动回复")
-        s_em = (await client.post("/api/sessions", json={"channel": "live"})).json()["session_id"]
+        s_em = (await client.post("/api/sessions", json={"channel": TEST_CHANNEL})).json()["session_id"]
         _, _, ev_em = await sse(client, "POST", f"/api/chat/{s_em}/stream",
                                 {"text": "我做完水光第三天，现在脸发白还特别疼，眼睛也有点看不清"})
         ho = first(ev_em, "handoff")
@@ -327,7 +336,19 @@ async def main() -> int:
         check("同一次回复里也有已审模板提示（并行）", "final" in names(ev_em), str(names(ev_em)))
 
         # /ops/tickets 返回的是 {"agent": {...}, "tickets": [...]}，不是裸数组
-        queue = (await client.get("/ops/tickets", headers=OPS_HEADERS)).json()
+        #
+        # ★ 本脚本造的会话走 TEST_CHANNEL，工单因此带 is_test 标记，
+        #   默认队列里看不到 —— 这里必须显式 include_test=true 才查得到。
+        #   顺带把"默认队列里没有它"也断言掉：只测一处的话，
+        #   哪天过滤失效（常量写错、判定写反）不会有任何测试报警。
+        default_tickets = ((await client.get("/ops/tickets", headers=OPS_HEADERS)).json()
+                           .get("tickets") or [])
+        check("测试工单默认不进真实队列",
+              not any(t.get("session_id") == s_em for t in default_tickets),
+              f"默认队列 {len(default_tickets)} 张")
+
+        queue = (await client.get("/ops/tickets", headers=OPS_HEADERS,
+                                  params={"include_test": "true"})).json()
         tickets = queue.get("tickets") or []
         check("队列返回带坐席身份（便于审计谁在看）", bool((queue.get("agent") or {}).get("agent_id")),
               str(queue.get("agent")))
@@ -383,7 +404,7 @@ async def main() -> int:
         check("页面含节点元数据表（前端靠它显示中文名）",
               "emergency_screen" in r.text, "未找到节点表")
 
-        s_tr = (await client.post("/api/sessions", json={"channel": "live"})).json()["session_id"]
+        s_tr = (await client.post("/api/sessions", json={"channel": TEST_CHANNEL})).json()["session_id"]
         _, _, ev_off = await sse(client, "POST", f"/api/chat/{s_tr}/stream",
                                  {"text": "热玛吉和超声炮有什么区别？"})
         check("不带 ?trace=1 时不发 node 事件（生产契约不变）",

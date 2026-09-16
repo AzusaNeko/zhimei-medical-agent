@@ -39,6 +39,11 @@ DEMO_PASSWORD = "zhimei-demo-2026"
 AGENT_SERVICE = ("service@zhimei.test", "service")
 AGENT_COMPLIANCE = ("compliance@zhimei.test", "compliance")
 
+#: 测试脚本统一用这个渠道建会话（见 smoke_api_live.py 里的详细说明）。
+#: 用真实渠道名（web）建会话，会让测试造的工单混进真实队列、无法区分。
+#: 本脚本自己不造工单，但保持一致 —— 免得以后复制粘贴时又用回 web。
+TEST_CHANNEL = "test"
+
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     (PASS if ok else FAIL).append(name)
@@ -65,7 +70,7 @@ async def main() -> int:
         # 断言就会误报 —— 第一版就在这里多写了个 POST /api/auth/me。
         for method, url, kw in [
             ("GET", "/api/sessions", {}),
-            ("POST", "/api/sessions", {"json": {"channel": "web"}}),
+            ("POST", "/api/sessions", {"json": {"channel": TEST_CHANNEL}}),
             ("GET", "/api/auth/me", {}),
             ("GET", "/ops/tickets", {}),
             ("POST", "/api/chat/00000000-0000-0000-0000-000000000000/stream",
@@ -156,11 +161,11 @@ async def main() -> int:
 
         # ══════════════ 4 会话隔离 ══════════════
         section("4. 会话按用户隔离")
-        r = await c.post("/api/sessions", json={"channel": "web"}, headers=bearer(user_token))
+        r = await c.post("/api/sessions", json={"channel": TEST_CHANNEL}, headers=bearer(user_token))
         check("登录后建会话成功", r.status_code == 200, f"HTTP {r.status_code}")
         sid = r.json()["session_id"]
 
-        r = await c.get("/api/sessions", params={"channel": "web"}, headers=bearer(user_token))
+        r = await c.get("/api/sessions", params={"channel": TEST_CHANNEL}, headers=bearer(user_token))
         mine = [s["session_id"] for s in r.json()["sessions"]]
         check("会话列表里能看到自己的会话", sid in mine, f"共 {len(mine)} 条")
         check("列表里只有自己的会话", len(mine) == 1, f"{len(mine)} 条")

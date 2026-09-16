@@ -92,6 +92,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
             background:#e8f1fb;color:#17405f}
 .raw-flag{font:11px Consolas,monospace;padding:2px 8px;border-radius:4px;
           background:#ffe3de;color:#8a2a1e}
+.testtoggle{display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--muted)}
+/* 测试工单行：整行降饱和 + 徽章，一眼能和真实工单区分开 */
+.badge.test{background:#efe7f7;color:#553a78}
+.row.is-test{background:#faf8fd}
+.row.is-test .line1 strong{color:#553a78}
 .toast.alert{background:var(--p0)}
 .toast:empty{display:none}
 @media(max-width:1000px){.layout{grid-template-columns:1fr}}
@@ -113,6 +118,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <span class="raw-flag" id="rawFlag" hidden>可见明文 PII</span>
     </span>
     <span><i class="dot" id="connDot"></i> <span id="connText">未连接</span></span>
+    <!-- 测试工单（channel=test）默认不进队列；要看时勾这里，行上带"测试"徽章 -->
+    <label class="testtoggle" title="测试工单默认不进队列。勾上才会显示，行上会标「测试」">
+      <input type="checkbox" id="showTest"> 显示测试工单
+    </label>
+    <button id="purgeTest" hidden
+            title="只清理带 is_test 标记的工单，真实工单不受影响">清理测试工单</button>
     <button id="refresh">刷新</button>
     <button id="logout" hidden>退出</button>
   </div>
@@ -170,6 +181,7 @@ function headers() {
 }
 
 let me = null;   // 当前坐席（登录后由服务端返回）
+let myPerms = [];  // 当前坐席的权限清单（前端据此显示/隐藏按钮；服务端仍会再判一次）
 
 async function api(url, opts = {}) {
   const r = await fetch(url, opts);
@@ -210,6 +222,7 @@ async function doLogin(ev) {
     if (!r.ok) { msg.textContent = d.message || "登录失败"; return; }
     localStorage.setItem("zhimei.agentToken", d.access_token);
     me = d.agent;
+    myPerms = d.permissions || [];
     msg.textContent = "";
     applyIdentity();
     hideAuth();
@@ -226,6 +239,8 @@ function applyIdentity() {
   document.getElementById("agentRole").textContent = role;
   // 一眼看出当前身份能不能看到明文 PII —— 这是坐席最需要心里有数的一件事
   document.getElementById("rawFlag").hidden = !["doctor", "compliance", "admin"].includes(role);
+  // 清理测试工单是不可逆操作，只给有权限的角色（服务端也会再判一次）
+  document.getElementById("purgeTest").hidden = !myPerms.includes("admin:purge");
   document.title = `坐席工作台 · ${role}`;
 }
 
@@ -245,6 +260,9 @@ async function bootData() {
 
 document.getElementById("loginForm").addEventListener("submit", doLogin);
 document.getElementById("logout").onclick = logout;
+document.getElementById("purgeTest").onclick = purgeTest;
+// 切换"显示测试工单"时重新拉队列；不动当前详情（用户可能正在看某张工单）
+document.getElementById("showTest").onchange = () => loadQueue();
 let toastTimer;
 function toast(text, isAlert) {
   const el = $("toast");
@@ -260,13 +278,34 @@ const fmtWait = (s) => s < 60 ? s + "s" : (s < 3600 ? Math.floor(s / 60) + "m" :
 // ── 队列 ──────────────────────────────────────────────
 async function loadQueue() {
   try {
-    const r = await fetch("/ops/tickets", { headers: headers() });
+    const showTest = $("showTest").checked;
+    const r = await fetch(`/ops/tickets?include_test=${showTest}`, { headers: headers() });
     if (!r.ok) throw new Error((await r.json()).message || r.status);
     const data = await r.json();
     state.tickets = data.tickets || [];
     renderQueue();
   } catch (e) {
     $("queue").innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+/** 清理测试工单。只删带 is_test 标记的 —— 真实工单不受影响。 */
+async function purgeTest() {
+  const n = state.tickets.filter((t) => t.is_test).length;
+  if (!n) { toast("当前列表里没有测试工单", false); return; }
+  if (!confirm(`将删除 ${n} 张测试工单（is_test=true）。\n真实工单不会被删除。\n\n确定继续？`)) return;
+  try {
+    const r = await api("/ops/tickets/test", {method: "DELETE", headers: headers()});
+    const d = await r.json();
+    if (!r.ok) { toast(d.message || "清理失败", true); return; }
+    state.current = null;
+    state.detail = null;
+    $("detail").innerHTML = '<div class="empty">从左侧选择一个工单</div>';
+    toast(d.message, false);
+    await loadQueue();
+    await loadMetrics();
+  } catch (e) {
+    toast("清理失败：" + e.message, true);
   }
 }
 
@@ -277,11 +316,13 @@ function renderQueue() {
     return;
   }
   $("queue").innerHTML = state.tickets.map((t) => `
-    <div class="row ${state.current === t.ticket_id ? "active" : ""}" data-id="${t.ticket_id}">
+    <div class="row ${state.current === t.ticket_id ? "active" : ""} ${t.is_test ? "is-test" : ""}"
+         data-id="${t.ticket_id}">
       <div class="line1">
         <span class="badge ${t.priority === "P0" ? "p0" : t.priority === "P1" ? "p1" : "p2"}">${esc(t.priority)}</span>
         <b>${esc(t.reason)}</b>
         <span class="badge st">${esc(t.status)}</span>
+        ${t.is_test ? '<span class="badge test">测试</span>' : ""}
         ${t.sla_breached ? '<span class="badge warn">已超时</span>' : ""}
       </div>
       <div class="sub">等待 ${fmtWait(t.wait_seconds)} · ${esc(t.context)}</div>
@@ -502,6 +543,7 @@ async function loadMetrics() {
     if (!r.ok) { localStorage.removeItem("zhimei.agentToken"); showAuth(); return; }
     const d = await r.json();
     me = d.agent;
+    myPerms = d.permissions || [];
     applyIdentity();
     hideAuth();
     await bootData();

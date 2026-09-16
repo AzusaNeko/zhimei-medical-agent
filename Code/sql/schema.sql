@@ -39,7 +39,11 @@ CREATE TABLE IF NOT EXISTS app.app_user (
   verify_expires TIMESTAMPTZ,
   last_login_at  TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_app_user_email ON app.app_user (lower(email));
+-- ★ 邮箱唯一性索引用的是 `email`，而这一列在旧库上还不存在 ——
+--   它的 CREATE INDEX 挪到了文末「10. 增量变更」，见那里的说明。
+--   把索引留在这里的话，旧库上跑 schema.sql 会在这里就报
+--   `column "email" does not exist` 并**中断整个脚本**，
+--   后面的建列语句一行都执行不到。
 
 CREATE TABLE IF NOT EXISTS app.user_identity (
   identity_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -317,6 +321,16 @@ CREATE TABLE IF NOT EXISTS ops.handoff_ticket (
   profile_summary TEXT,
   last_turns    JSONB NOT NULL DEFAULT '[]',
   risk_report   JSONB NOT NULL DEFAULT '{}',
+  -- ★ 这条工单是不是**测试造的**（自动化脚本 / 冒烟 / 压测）。
+  --
+  --   为什么值得单开一列，而不是"按时间或按 reason 猜"：
+  --   测试工单和真实工单在结构上**一模一样**（都是 P0、紧急、走同一套流程），
+  --   混在队列里会直接毁掉演示 —— 坐席打开面板看到几十张工单，
+  --   分不清哪张是眼前这位顾客的；它还会污染指标（SLA 超时率、平均等待）。
+  --
+  --   判定来源是**会话的 channel**：测试脚本用 channel='test' 建会话，
+  --   真实入口用 web / wechat / app。让调用方自己声明，比事后猜可靠得多。
+  is_test       BOOLEAN NOT NULL DEFAULT false,
   assigned_to   TEXT,                 -- ★ TEXT 而不是 UUID，理由见文件末尾「类型约定」
   accepted_at   TIMESTAMPTZ,          -- ★ 非空后才允许告知用户"人工已接入"
   closed_at     TIMESTAMPTZ,
@@ -324,6 +338,9 @@ CREATE TABLE IF NOT EXISTS ops.handoff_ticket (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ticket_queue ON ops.handoff_ticket (status, priority, created_at);
+-- ★ 队列默认要把测试工单过滤掉，所以把 is_test 放进索引 —— 但这一列在旧库上
+--   还不存在，所以这个索引和它的建列语句一起放在文末「10. 增量变更」。
+--   放在这里的话，旧库上会在这里报 `column "is_test" does not exist` 并中断脚本。
 
 CREATE TABLE IF NOT EXISTS ops.handoff_event (
   event_id   BIGSERIAL PRIMARY KEY,
@@ -377,6 +394,84 @@ CREATE TABLE IF NOT EXISTS app.llm_call_log (
   error          TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ══════════════════════════════════════════════════════════════
+--  10. 增量变更（对**已有库**执行）
+--
+--  ★ 为什么需要这一段：上面所有建表都写成 `CREATE TABLE IF NOT EXISTS`，
+--    它对**已存在**的表是**整条跳过**的 —— 表里少一列也不会补。
+--    于是"升级就是重跑一遍 schema.sql"这条路径在**加列**时是失效的，
+--    症状是运行期一个毫无线索的 500（`column "is_test" does not exist`），
+--    而建表语句看上去明明写着这一列。
+--
+--    所以每次加列，除了改上面的 CREATE TABLE，**必须**在这里补一条
+--    `ADD COLUMN IF NOT EXISTS`。这一段可以随便重复跑。
+--
+--  ⚠️ 加列时默认值要给全：已有行会按 DEFAULT 回填。
+--     如果新列是 `NOT NULL` 又不给 DEFAULT，已有库上加列会直接失败。
+-- ══════════════════════════════════════════════════════════════
+
+-- 登录与鉴权（JWT 那一版加的）
+ALTER TABLE app.app_user  ADD COLUMN IF NOT EXISTS email          TEXT;
+ALTER TABLE app.app_user  ADD COLUMN IF NOT EXISTS password_hash  TEXT;
+ALTER TABLE app.app_user  ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE app.app_user  ADD COLUMN IF NOT EXISTS verify_token   TEXT;
+ALTER TABLE app.app_user  ADD COLUMN IF NOT EXISTS verify_expires TIMESTAMPTZ;
+ALTER TABLE app.app_user  ADD COLUMN IF NOT EXISTS last_login_at  TIMESTAMPTZ;
+
+ALTER TABLE ops.agent_user ADD COLUMN IF NOT EXISTS status        TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE ops.agent_user ADD COLUMN IF NOT EXISTS email         TEXT;
+ALTER TABLE ops.agent_user ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE ops.agent_user ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+
+-- 二次复核对齐（`escalation_reason` 让"为什么升级"可统计）
+ALTER TABLE app.review_audit ADD COLUMN IF NOT EXISTS escalation_reason TEXT;
+
+-- 测试工单标记（见 README「测试工单为什么要单开一列」）
+ALTER TABLE ops.handoff_ticket ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+
+-- ★ 依赖新列的索引必须建在**建列之后**。
+--   这条规则不是洁癖：`CREATE INDEX` 引用了不存在的列会直接报错并**中断整个
+--   schema.sql**，于是后面所有语句（包括补列的 ALTER）一行都跑不到 ——
+--   表现为"升级脚本明明写了补列，跑完列还是不在"。
+--   实测踩到两次：`idx_app_user_email`（依赖 email）和 `idx_ticket_queue_real`
+--   （依赖 is_test，而且它就写在建表语句下面，看起来最不可能出错）。
+--   所以这两条都从各自的建表处挪到了这里。
+--
+--   以后加列时请一并检查：有没有 CREATE INDEX / 约束引用了这一列。
+CREATE INDEX IF NOT EXISTS idx_app_user_email ON app.app_user (lower(email));
+CREATE INDEX IF NOT EXISTS idx_ticket_queue_real
+  ON ops.handoff_ticket (is_test, status, priority, created_at);
+
+-- ★ 一次性回填（**不要**放进自动执行的部分，是否执行取决于你库里有什么）：
+--   本次加列时，历史工单全部来自自动化脚本，所以整表回填成测试工单；
+--   随后用 DELETE /ops/tickets/test 清掉。真实环境里**不要**跑这两句。
+--     UPDATE ops.handoff_ticket SET is_test = true;                      -- 全部是测试残留时
+--     UPDATE ops.handoff_ticket SET is_test = true WHERE created_at < '...';  -- 只回填某个时间点之前
+
+-- ★ 类型订正：UUID → TEXT（详见文件末尾「类型约定」）。
+--   这几列的类型在最初的库里是 UUID，而代码里的坐席工号是 'demo-agent-0001'
+--   这种非 UUID 字符串，于是真实库上「接单」100% 失败、fake 档位却全绿。
+--   写成 DO 块是因为 `ALTER COLUMN ... TYPE` **没有** IF NOT EXISTS 语法，
+--   得自己查 information_schema；已经是 TEXT 时整段是空操作。
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'ops' AND table_name = 'agent_user'
+                AND column_name = 'agent_id' AND data_type <> 'text') THEN
+    ALTER TABLE ops.agent_user ALTER COLUMN agent_id TYPE TEXT USING agent_id::text;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'ops' AND table_name = 'handoff_ticket'
+                AND column_name = 'assigned_to' AND data_type <> 'text') THEN
+    ALTER TABLE ops.handoff_ticket ALTER COLUMN assigned_to TYPE TEXT USING assigned_to::text;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'ops' AND table_name = 'handoff_event'
+                AND column_name = 'actor' AND data_type <> 'text') THEN
+    ALTER TABLE ops.handoff_event ALTER COLUMN actor TYPE TEXT USING actor::text;
+  END IF;
+END $$;
 
 -- ══════════════════════════════════════════════════════════════
 --  类型约定：什么该是 UUID，什么该是 TEXT

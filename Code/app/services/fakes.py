@@ -355,10 +355,15 @@ class FakePg:
     async def create_handoff_ticket(self, *, session_id: str, thread_id: str, user_id: str | None,
                                     reason: str, priority: str, profile_summary: str,
                                     last_turns: list[dict], risk_report: dict) -> dict:
+        # is_test 的判定与 PgStore 一致：看**会话的 channel** 是不是 'test'。
+        # 内存版没有 SQL 可以用，就手写同一条规则 —— 两边判定必须一样，
+        # 否则会出现"fake 档位测过了、真实档位行为不同"。
+        sess = self.sessions.get(session_id) or {}
         ticket = {"ticket_id": str(uuid.uuid4()), "session_id": session_id,
                   "thread_id": thread_id, "user_id": user_id, "reason": reason,
                   "priority": priority, "status": "open", "profile_summary": profile_summary,
                   "last_turns": last_turns, "risk_report": risk_report,
+                  "is_test": sess.get("channel") == "test",
                   "accepted_at": None}
         self.tickets.append(ticket)
         return ticket
@@ -417,13 +422,23 @@ class FakePg:
     # ══════════════ 运营后台（与 PgStore 保持同一接口，否则自检就没意义）══════════════
     async def list_tickets(self, *, statuses: list[str] | None = None,
                            priorities: list[str] | None = None,
+                           include_test: bool = False,
                            limit: int = 50) -> list[dict]:
         rows = [t for t in self.tickets
                 if (not statuses or t["status"] in statuses)
-                and (not priorities or t["priority"] in priorities)]
+                and (not priorities or t["priority"] in priorities)
+                and (include_test or not t.get("is_test"))]
         order = {"P0": 0, "P1": 1, "P2": 2}
         rows.sort(key=lambda t: order.get(t["priority"], 9))
         return rows[:limit]
+
+    async def purge_test_tickets(self) -> int:
+        """与 PgStore 同形：只删 is_test 的，返回条数。"""
+        doomed = [t["ticket_id"] for t in self.tickets if t.get("is_test")]
+        self.tickets = [t for t in self.tickets if not t.get("is_test")]
+        self.handoff_events = [e for e in self.handoff_events
+                               if e.get("ticket_id") not in set(doomed)]
+        return len(doomed)
 
     async def get_ticket(self, ticket_id: str) -> dict | None:
         return next((t for t in self.tickets if t["ticket_id"] == ticket_id), None)
@@ -466,16 +481,19 @@ class FakePg:
                                 "raw_message": raw_message, "verdict": verdict, "note": note})
 
     async def ops_metrics(self) -> dict:
-        open_tickets = [t for t in self.tickets
+        # is_test 的过滤与 PgStore 一致（那边 SQL 里写了 WHERE is_test = false）。
+        # 两边判定必须一样，否则"fake 下指标正常、真实库上被测试数据污染"。
+        real = [t for t in self.tickets if not t.get("is_test")]
+        open_tickets = [t for t in real
                         if t["status"] in ("open", "accepted", "in_progress", "escalated")]
         by_rule: dict[str, int] = {}
         for hit in self.rule_hits:
             by_rule[hit["rule_id"]] = by_rule.get(hit["rule_id"], 0) + 1
         return {
-            "tickets_total": len(self.tickets),
+            "tickets_total": len(real),
             "tickets_open": len(open_tickets),
             "tickets_p0_open": len([t for t in open_tickets if t["priority"] == "P0"]),
-            "tickets_accepted": len([t for t in self.tickets if t.get("accepted_at")]),
+            "tickets_accepted": len([t for t in real if t.get("accepted_at")]),
             "review_rounds": len(self.audits),
             "first_pass_rate": None,
             "hard_rule_top": sorted(by_rule.items(), key=lambda x: -x[1])[:10],

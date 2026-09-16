@@ -44,6 +44,13 @@ def section(title: str) -> None:
 _AGENT_TOKENS: dict[str, str] = {}
 _SMOKE_PW = "smoke-ops-password"
 
+#: 测试脚本统一用这个渠道建会话（见 smoke_api_live.py 里的详细说明）。
+#: ★ 本脚本**每跑一次就造一张紧急工单**，所以这里尤其重要：
+#:   用 web 渠道建会话的话，测试工单和真实顾客的工单无法区分，
+#:   会污染队列与 SLA 指标（坐席打开面板分不清哪张是眼前这位顾客的）。
+#:   用 test 渠道后，工单自动带 is_test 标记、默认不进队列。
+TEST_CHANNEL = "test"
+
 
 def H(role: str = "service") -> dict:
     """按角色取坐席令牌。
@@ -117,17 +124,29 @@ async def main() -> int:
             await login_customer(client)
             check("四个角色坐席都能登录",
                   len(_AGENT_TOKENS) == 4, str(sorted(_AGENT_TOKENS)))
-            sid = (await client.post("/api/sessions", json={})).json()["session_id"]
+            sid = (await client.post("/api/sessions", json={"channel": TEST_CHANNEL})).json()["session_id"]
             async with client.stream("POST", f"/api/chat/{sid}/stream",
                                      json={"text": "我做完水光第三天，现在脸发白还特别疼，眼睛也有点看不清"}) as r:
                 async for _ in r.aiter_lines():
                     pass
 
+            # ★ 默认队列必须**看不到**这张工单：它是 test 渠道造的，带 is_test 标记。
+            #   这条断言和下面那条是一对 —— 只测"勾选后能看到"，过滤失效了也发现不了。
             r = await client.get("/ops/tickets", headers=H())
             check("GET /ops/tickets → 200", r.status_code == 200, r.text[:120])
+            default_rows = r.json().get("tickets") or []
+            check("测试工单默认不进队列", not any(t["session_id"] == sid for t in default_rows),
+                  f"默认队列 {len(default_rows)} 张")
+
+            # 本脚本要看的是自己刚造的那张，所以显式勾选"含测试工单"
+            r = await client.get("/ops/tickets", params={"include_test": "true"}, headers=H())
+            check("include_test=true → 200", r.status_code == 200, r.text[:120])
             tickets = r.json().get("tickets") or []
             check("工单已进队列", len(tickets) >= 1, json.dumps(tickets, ensure_ascii=False)[:160])
-            ticket = tickets[0]
+            ticket = next((t for t in tickets if t["session_id"] == sid), None)
+            check("勾选后能看到自己那张测试工单", ticket is not None)
+            check("队列行带 is_test 标记", bool(ticket and ticket["is_test"]))
+            ticket = ticket or tickets[0]
             tid = ticket["ticket_id"]
             check("优先级为 P0", ticket["priority"] == "P0", str(ticket["priority"]))
             check("队列行带等待时长与上下文",

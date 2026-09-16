@@ -43,6 +43,11 @@ PERMISSIONS: dict[str, set[str]] = {
     "admin":      {"*"},
 }
 
+#: 清库这类**不可逆**操作单独列一条权限名，只给 admin（`*` 覆盖了它）。
+#: 为什么用权限名而不是在路由里硬判角色：权限表是唯一事实来源；
+#: 硬判的话，将来加角色时"为什么新角色不能清库"要翻代码才知道。
+PURGE_PERMISSION = "admin:purge"
+
 #: 角色能看到哪些敏感字段（未列出 = 脱敏后返回）
 RAW_FIELD_ROLES = {"doctor", "compliance", "admin"}
 
@@ -83,6 +88,27 @@ def require(agent: Agent, permission: str) -> None:
     if not agent.can(permission):
         raise HTTPException(status_code=403, detail={
             "code": "forbidden", "message": f"角色 {agent.role} 无权执行 {permission}"})
+
+
+def effective_permissions(role: str) -> list[str]:
+    """把角色展开成**具体的权限名清单**，供前端渲染。
+
+    ★ 不能直接把 `PERMISSIONS[role]` 发出去：admin 是 `{"*"}`，
+      前端拿到一个星号没法判断"这个按钮该不该显示" —— 于是每个客户端都得
+      自己实现一遍通配符语义，漏一处就变成"按钮点下去才 403"。
+      服务端展开成清单，前端只写 `permissions.includes("...")` 即可。
+
+    ★ 这个清单只用于**显示**。真正的判定在 `require()` 里，用原始的
+      PERMISSIONS 表 —— 前端改了 localStorage 也拿不到权限。
+    """
+    perms = PERMISSIONS.get(role, set())
+    if "*" in perms:
+        all_perms: set[str] = set()
+        for s in PERMISSIONS.values():
+            all_perms |= s
+        all_perms.discard("*")
+        return sorted(all_perms | {PURGE_PERMISSION})
+    return sorted(perms)
 
 
 def mask_for(agent: Agent, text: str) -> str:

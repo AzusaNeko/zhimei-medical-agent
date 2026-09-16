@@ -11,10 +11,10 @@
 
 | 项 | 状态 |
 |---|---|
-| 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 71 项断言全过） |
+| 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 75 项断言全过） |
 | 四个典型场景端到端演示 | ✅ 已验证（科普含修订环 / 预约含确认执行 / 紧急 / 澄清） |
-| **FastAPI + SSE 接口层** | ✅ **已实现并验证**（`scripts/smoke_api.py` 26 项 + `smoke_api_live.py` 41 项真实 HTTP） |
-| **运营后台（坐席工作台）** | ✅ **已实现并验证**（`scripts/smoke_ops.py` 36 项；面板 + 队列 + 跨模块联动） |
+| **FastAPI + SSE 接口层** | ✅ **已实现并验证**（`scripts/smoke_api.py` 37 项 + `smoke_api_live.py` 53 项真实 HTTP） |
+| **运营后台（坐席工作台）** | ✅ **已实现并验证**（`scripts/smoke_ops.py` 42 项；面板 + 队列 + 跨模块联动） |
 | **C 端聊天页 + Agent 执行轨迹可视化** | ✅ **已实现**（`app/web/chat.html`；`scripts/check_ui.cjs` 静态校验） |
 | 真实依赖（Postgres / Milvus / BGE / DeepSeek） | ✅ **已在本机跑通**（`check_env` 18 通过 / 0 阻塞；四场景 `--demo` 退出码 0） |
 | 成本与延迟观测 | ✅ `app.llm_call_log` 已接入；`scripts/llm_stats.py` 出报表 |
@@ -47,7 +47,7 @@ python scripts/check_env.py
 ```bash
 cd Code
 pip install -r requirements.txt        # 或者 uv pip install -r requirements.txt
-python scripts/smoke.py                # 42 项不变量断言
+python scripts/smoke.py                # 75 项不变量断言
 python -m app.cli --demo --profile fake
 ```
 
@@ -112,8 +112,8 @@ python -m app.cli --interactive --user <user_id>
 > 📋 **接真实依赖时请照着 [`SELF-TEST.md`](SELF-TEST.md) 逐项走。**
 > 那份清单写明了每一步的期望结果、出错先看哪里，以及**只有真实模型才能验的质量项**
 > （引用是否可溯源、三位专家意见是否真的视角不同、审查超时是否降级为转人工、
-> 模型会不会把"会不会失明"误判成紧急等）。接线已经用 fake 档位验过 104 项断言，
-> 清单验的是行为与质量。
+> 模型会不会把"会不会失明"误判成紧急等）。接线已经用 fake 档位验过 112 项断言
+> （`smoke.py` 75 + `smoke_api.py` 37），清单验的是行为与质量。
 
 > ⚠️ 真实档位跑 CLI 时**记得带 `--user <uuid>`**（uuid 在 `seed_kb.py` 的输出里）。
 > 不绑用户 → 会话 `auth.verified=false` → 所有预约类请求会被判 `need_info`。
@@ -125,7 +125,7 @@ python -m app.cli --interactive --user <user_id>
 ```bash
 python -m app.api --profile fake --port 8077             # 起服务（fake 档位不需要外部依赖）
 python scripts/demo_api.py --base http://127.0.0.1:8077  # 打印真实的 SSE 事件流
-python scripts/smoke_api.py                              # 接口层冒烟（26 项，进程内跑 ASGI）
+python scripts/smoke_api.py                              # 接口层冒烟（37 项，进程内跑 ASGI）
 ```
 
 | 端点 | 说明 |
@@ -216,6 +216,7 @@ X-Agent-Role: compliance      ← 请求方自己说自己是合规岗
 ```bash
 python scripts/smoke_auth.py --base http://127.0.0.1:8090    # 40 项
 python scripts/check_store_parity.py                          # Pg 与 Fake 接口一致性
+python scripts/check_schema.py                                # 新建库 + 升级旧库两条路径（34 项）
 ```
 
 ---
@@ -225,7 +226,7 @@ python scripts/check_store_parity.py                          # Pg 与 Fake 接�
 ```bash
 python -m app.api --port 8090            # real 档位；加 --profile fake 则不需要任何外部依赖
 # 浏览器打开 http://127.0.0.1:8090/chat
-node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点表同步 / DOM id）
+node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点表同步 / DOM id / 测试工单隔离，17 项）
 ```
 
 同样是**单文件 HTML + 原生 JS**（`app/web/chat.html`，无构建步骤、无 CDN），由 FastAPI 托管。
@@ -287,7 +288,7 @@ node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点�
 ```bash
 python -m app.api --profile fake --port 8077
 # 浏览器打开 http://127.0.0.1:8077/ops/panel
-python scripts/smoke_ops.py        # 36 项（不变量、跨模块联动、权限与脱敏）
+python scripts/smoke_ops.py        # 42 项（不变量、跨模块联动、权限与脱敏）
 ```
 
 > 两个页面配合起来演示最完整：`/chat` 是顾客侧（提问 → 看轨迹 → 确认操作），
@@ -300,15 +301,33 @@ python scripts/smoke_ops.py        # 36 项（不变量、跨模块联动、权�
 
 | 端点 | 作用 |
 |---|---|
-| `GET /ops/tickets` | 队列（优先级排序、等待时长、SLA 超时标记） |
+| `GET /ops/tickets` | 队列（优先级排序、等待时长、SLA 超时标记）。默认**不含测试工单**，要看得传 `?include_test=true` |
 | `GET /ops/tickets/{id}` | 详情：画像摘要 / 最近对话 / 风险报告（含 AI 未发出的草稿） |
 | `POST /ops/tickets/{id}/accept` | 接单（**写入 `accepted_at`，同时关掉 AI**） |
 | `POST /ops/tickets/{id}/reply` | 回复（规则层轻校验：block 硬拦、revise 软提示） |
 | `POST /ops/tickets/{id}/escalate` \| `close` \| `reopen` | 转医师 / 关单（恢复 AI） / 重开 |
 | `POST /ops/tickets/{id}/misreport` | 标记误报 —— 紧急词表调优的唯一数据来源 |
+| `DELETE /ops/tickets/test` | 清掉**全部测试工单**（`WHERE is_test = true` 写死在代码里）。需要 `admin:purge` 权限 |
 | `GET /ops/metrics` | 指标看板 |
 | `GET /ops/stream` | SSE 队列快照 + SLA 告警（`?once=true` 只推一帧） |
 | `GET /ops/panel` | 监控面板 |
+
+### 测试工单为什么要单开一列
+
+自动化脚本（冒烟、压测、现场演示）造的工单和真实顾客的工单**结构上一模一样** ——
+同样 P0、同样紧急流程、同样进队列。混在一起有三个后果：坐席打开面板看到几十张，
+分不清哪张是眼前这位顾客的；SLA 指标（超时率、平均等待）被历史测试数据污染；
+演示时"紧急工单"这个卖点直接被淹掉。
+
+所以判定来源是**会话的 `channel`**：测试脚本用 `channel='test'` 建会话，真实入口用
+`web` / `wechat` / `app`。建工单时顺手读一次会话的 channel 打上 `is_test` ——
+让调用方自己声明，比事后按时间或按 `reason` 猜可靠得多（两个接管入口
+`human_handoff` 节点与 API 层 `_force_handoff` 都不用手工传参，少一处漏一处）。
+
+清库这条路径刻意做成 `WHERE is_test = true` 的**硬约束**而不是可选参数：
+这个方法在设计上就不可能删到真实工单。之前清库靠手写 SQL，那条 SQL 不区分
+测试与真实，在真实环境执行一次顾客的工单就没了 —— 把"只删测试"写进代码，
+比写在运维手册里可靠。
 
 ### 这一层守住的五条不变量（都有冒烟断言）
 
@@ -351,9 +370,12 @@ Code/
 │  │  └─ build.py              # ★ 主图装配
 │  └─ services/                # 模型网关 / 规则引擎 / 检索 / 存储 / 凭据 / 依赖容器
 ├─ scripts/
-│  ├─ smoke.py                 # 无需 pytest 的冒烟验证（42 项）
+│  ├─ smoke.py                 # 无需 pytest 的冒烟验证（75 项）
+│  ├─ check_store_parity.py    # PgStore 与 FakePg 的接口必须逐字一致
+│  ├─ check_schema.py          # 新建库 + 升级旧库两条路径都要能跑通（34 项）
+│  ├─ check_ui.cjs             # 前端静态校验：语法 / 节点表同步 / 测试工单隔离（17 项）
 │  └─ seed_kb.py               # 演示数据播种
-├─ sql/schema.sql              # app / ops schema 表结构
+├─ sql/schema.sql              # app / ops schema 表结构 + 增量变更（加列必读文末第 10 节）
 ├─ docker-compose.yml          # Postgres + Milvus（etcd + minio）
 └─ tests/test_smoke.py         # 同样的断言，pytest 形态（需 pip install pytest-asyncio）
 ```

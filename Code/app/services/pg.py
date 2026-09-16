@@ -261,15 +261,26 @@ class PgStore:
                                     user_id: str | None, reason: str, priority: str,
                                     profile_summary: str, last_turns: list[dict],
                                     risk_report: dict) -> dict:
+        # ★ 测试工单的判定放在**这一处**：建工单时顺手读一下会话的 channel。
+        #   为什么不放在调用方：手工接管的入口有两个（human_handoff 节点与
+        #   API 层的 _force_handoff），每个都传一遍迟早漏一个；而且 state 里的
+        #   channel 是"这条消息走什么传输"（api/cli），跟会话的 channel
+        #   （web/test，即"用户从哪来"）是两回事 —— 传错来源就会静默失效。
+        #   接管是低频路径，多一次查询完全划算。
         row = await self._fetchrow(
             """INSERT INTO ops.handoff_ticket
-               (session_id, thread_id, user_id, reason, priority, profile_summary, last_turns, risk_report)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ticket_id, status, created_at""",
+               (session_id, thread_id, user_id, reason, priority, profile_summary,
+                last_turns, risk_report, is_test)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+                       COALESCE((SELECT channel = 'test' FROM app.chat_session
+                                  WHERE session_id = $1), false))
+               RETURNING ticket_id, status, created_at, is_test""",
             _uuid(session_id), thread_id, _uuid(user_id), reason, priority,
             profile_summary, json.dumps(last_turns, ensure_ascii=False, default=str),
             json.dumps(risk_report, ensure_ascii=False, default=str))
         return {"ticket_id": str(row["ticket_id"]), "status": row["status"],
-                "created_at": row["created_at"].isoformat(), "reason": reason, "priority": priority}
+                "created_at": row["created_at"].isoformat(), "reason": reason,
+                "priority": priority, "is_test": bool(row["is_test"])}
 
     # ══════════════ 画像 ══════════════
     async def load_profile(self, user_id: str | None) -> dict:
@@ -390,24 +401,57 @@ class PgStore:
 
     async def list_tickets(self, *, statuses: list[str] | None = None,
                            priorities: list[str] | None = None,
+                           include_test: bool = False,
                            limit: int = 50) -> list[dict]:
+        """工单队列。
+
+        ★ include_test 默认 **False** —— 测试工单默认不出现在队列里。
+          理由是它们的结构跟真实工单完全一样（同样 P0、同样紧急流程），
+          混在一起会直接毁掉演示：坐席打开面板看到几十张，分不清哪张是
+          眼前这位顾客的。还要看时传 include_test=True，UI 上是个勾选框。
+        """
         rows = await self._fetch(
             """SELECT ticket_id, session_id, thread_id, user_id, reason, priority, status,
-                      profile_summary, assigned_to, accepted_at, closed_at, close_reason, created_at
+                      profile_summary, assigned_to, accepted_at, closed_at, close_reason,
+                      created_at, is_test
                FROM ops.handoff_ticket
                WHERE ($1::text[] IS NULL OR status = ANY($1))
-                 AND ($2::text[] IS NULL OR priority = ANY($2))
+                 AND ($2::text[] IS NULL OR priority = ANY($2::text[]))
+                 AND ($4::bool OR is_test = false)
                ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 ELSE 2 END,
                         created_at
                LIMIT $3""",
-            statuses, priorities, limit)
+            statuses, priorities, limit, include_test)
         return [_row(r) for r in rows]
+
+    async def purge_test_tickets(self) -> int:
+        """删除全部测试工单，返回删除条数。
+
+        ★ `WHERE is_test = true` 是**硬约束**，不是可选参数 —— 这个方法
+          在设计上就不可能删到真实工单。之前清库靠手写 SQL，那条 SQL
+          不区分测试与真实，在真实环境里执行一次顾客工单就没了。
+          把"只删测试"写进代码，比写在运维手册里可靠。
+        ★ 先删事件（外键子表），再删工单主表。
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """DELETE FROM ops.handoff_event
+                        WHERE ticket_id IN (SELECT ticket_id FROM ops.handoff_ticket
+                                             WHERE is_test = true)""")
+                status = await conn.execute(
+                    "DELETE FROM ops.handoff_ticket WHERE is_test = true")
+        # asyncpg 的 DELETE 返回 "DELETE 12" 这样的状态串
+        try:
+            return int(str(status).split()[-1])
+        except (ValueError, IndexError):
+            return 0
 
     async def get_ticket(self, ticket_id: str) -> dict | None:
         row = await self._fetchrow(
             """SELECT ticket_id, session_id, thread_id, user_id, reason, priority, status,
                       profile_summary, last_turns, risk_report, assigned_to,
-                      accepted_at, closed_at, close_reason, created_at
+                      accepted_at, closed_at, close_reason, created_at, is_test
                FROM ops.handoff_ticket WHERE ticket_id = $1""",
             _uuid(ticket_id))
         return _row(row) if row else None
@@ -566,6 +610,13 @@ class PgStore:
             _uuid(ticket_id), source, ref_id, raw_message, verdict, note)
 
     async def ops_metrics(self) -> dict:
+        # ★ 指标**必须**排除测试工单（`is_test = true`）。
+        #   只把测试工单从队列里藏起来是不够的：这里的 avg_wait_seconds 就是
+        #   SLA 指标，自动化脚本每跑一次就往里塞一张 P0 工单，
+        #   而脚本从不接单（accepted_at 永远为空）——
+        #   结果是"平均等待时长"和"未处理工单数"被历史测试数据永久污染。
+        #   测试数据进业务指标，比测试数据进队列更危险：
+        #   队列里的脏数据看得见，指标里的脏数据会被当成真实结论用。
         row = await self._fetchrow(
             """SELECT
                  COUNT(*)                                                          AS tickets_total,
@@ -576,7 +627,7 @@ class PgStore:
                                                                                    AS tickets_p0_open,
                  COUNT(*) FILTER (WHERE accepted_at IS NOT NULL)                    AS tickets_accepted,
                  AVG(EXTRACT(EPOCH FROM (accepted_at - created_at)))                AS avg_wait_seconds
-               FROM ops.handoff_ticket""")
+               FROM ops.handoff_ticket WHERE is_test = false""")
         audit = await self._fetchrow(
             """SELECT COUNT(*) AS review_rounds,
                       COUNT(*) FILTER (WHERE verdict = 'pass' AND review_round = 1) AS first_pass,

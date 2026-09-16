@@ -43,8 +43,10 @@ class OpsError(Exception):
 #  队列与详情
 # ════════════════════════════════════════════════════════════════
 async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = None,
-                     priorities: list[str] | None = None, limit: int = 50) -> list[dict]:
-    rows = await rt.deps.pg.list_tickets(statuses=statuses, priorities=priorities, limit=limit)
+                     priorities: list[str] | None = None, include_test: bool = False,
+                     limit: int = 50) -> list[dict]:
+    rows = await rt.deps.pg.list_tickets(statuses=statuses, priorities=priorities,
+                                         include_test=include_test, limit=limit)
     now = datetime.now(timezone.utc)
     out = []
     for t in rows:
@@ -62,6 +64,9 @@ async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = 
             "sla_breached": waited > sla and t.get("status") == "open",
             "accepted_at": t.get("accepted_at"),
             "assigned_to": t.get("assigned_to"),
+            # 测试工单带标记：队列默认已经把它们过滤掉了，但"显示测试工单"
+            # 打开时，界面上必须能一眼看出哪张是测试的 —— 否则就等于没标记。
+            "is_test": bool(t.get("is_test")),
             # 队列行必须能看出"这事大概是什么"，否则坐席得点进去才知道要不要先接
             "context": _context_line(t.get("profile_summary"), t.get("reason")),
         })
@@ -112,6 +117,7 @@ async def get_detail(rt: Runtime, agent: Agent, ticket_id: str) -> dict:
             "closed_at": ticket.get("closed_at"),
             "close_reason": ticket.get("close_reason"),
             "created_at": ticket.get("created_at"),
+            "is_test": bool(ticket.get("is_test")),
             # ★ 这条是硬约束：没接单就不能告诉用户"人工已接入"
             "human_joined": bool(ticket.get("accepted_at")),
         },
