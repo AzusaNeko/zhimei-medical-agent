@@ -57,6 +57,7 @@ const stripComments = (js) => js
 
 const chatHtml = read('app/web/chat.html');
 const panelHtml = read('app/ops/panel.html');
+const apiEvents = read('app/api/events.py');
 
 // ── A. 语法 ──
 console.log('A. JS 语法');
@@ -252,7 +253,7 @@ const newEl = (id, onText) => {
     style: {}, dataset: {}, children: [], parentNode: null,
     scrollTop: 0, scrollHeight: 0, clientHeight: 0, offsetHeight: 0,
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {}, appendChild(c) { this.children.push(c); },
+    addEventListener() {}, appendChild(c) { this.children.push(c); return c; },
     removeChild() {}, remove() {}, insertBefore() {}, replaceChildren() {},
     focus() {}, blur() {}, click() {},
     setAttribute() {}, getAttribute: () => null,
@@ -282,6 +283,9 @@ async function bootPage(html, { token, routes, local }) {
       return els.get(id);
     },
     createElement: (t) => newEl(t, record),
+    // SVG 用的命名空间版本。工作流图整张都是 SVG，少了这个 stub 会直接报
+    // "createElementNS is not a function"，而真实浏览器里不会 —— 那就是个假失败。
+    createElementNS: (ns, t) => newEl(t, record),
     createTextNode: (t) => { record(t); return newEl('#text', record); },
     addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
     body: newEl('body', record), documentElement: newEl('html', record),
@@ -391,10 +395,26 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
   const input = chat.els.get('input');
   check('chat.html 打开"人工接管中"的会话仍让用户能继续说话',
         input && input.disabled === false,
-        '输入框被禁用了 —— 用户被告知"马上有人来"之后却说不了话');
-  check('chat.html 接管中会显示提示条（告诉用户 AI 暂停、消息会转给客服）',
+        '输入框被禁用了 —— 用户被告知"马上有人来"之后却说不了话');  check('chat.html 接管中会显示提示条（告诉用户 AI 暂停、消息会转给客服）',
         chat.els.get('takeoverBar') && chat.els.get('takeoverBar').hidden === false,
         '没有提示条 —— 用户会一直等 AI 回复');
+
+  // ★ 点「＋ 新对话」后提示条必须收掉。
+  //   这条是用户报的 bug：新建对话里还挂着"人工客服已接管"。
+  //   根因是接管状态散在四个地方（takeover / lastSeenTaken / 提示条 hidden /
+  //   placeholder），而 newChat() 直接给前两个变量赋值、跳过了 DOM。
+  const newBtn = chat.els.get('newChat');
+  if (newBtn && newBtn.onclick) {
+    newBtn.onclick();
+    check('点「＋ 新对话」后接管提示条收掉（不能带到新会话）',
+          chat.els.get('takeoverBar').hidden === true,
+          '提示条还在 —— 新对话里会一直显示"人工客服处理中"');
+    check('点「＋ 新对话」后输入框 placeholder 复位',
+          chat.els.get('input').placeholder !== '继续补充情况，客服会看到…',
+          `placeholder 仍是：${chat.els.get('input').placeholder}`);
+  } else {
+    check('chat.html 的「＋ 新对话」按钮绑定了处理函数', false, '没找到 onclick');
+  }
 
   // ── F3 轮询：坐席回复必须能**主动**出现在用户这一侧 ──
   //
@@ -450,6 +470,85 @@ const TOKEN = 'x'.repeat(40);   // 只用来占位，服务端是桩
           w.texts.filter((t) => t.includes('脸发白还特别疼')).length === 1,
           `用户那句话出现了 ${w.texts.filter((t) => t.includes('脸发白还特别疼')).length} 次`);
   }
+
+  // ── H. 工作流执行图（切到那一栏要真的画出来）──
+  //
+  //  ★ 只做静态检查是不够的："能取到拓扑" 和 "能画出来" 是两件事，
+  //    中间隔着布局、SVG 组装、分组着色好几步，任何一步错了界面都是一片空白。
+  //    所以这里给一个桩 /api/graph，真的点一下「工作流图」那一栏，看 SVG 里
+  //    有没有东西。
+  console.log('\nH. 工作流执行图');
+  const GRAPH_STUB = {
+    nodes: [
+      {id: 'normalize', group: 'main'}, {id: 'classify', group: 'main'},
+      {id: 'dispatch', group: 'main'}, {id: 'k_agent', group: 'main'},
+      {id: 'kb_intake', group: 'kb'}, {id: 'kb_draft', group: 'kb'},
+      {id: 'aggregate', group: 'main'}, {id: 'risk_gate', group: 'main'},
+      {id: 'gate_in', group: 'risk'}, {id: 'send', group: 'main'},
+    ],
+    edges: [
+      {source: 'normalize', target: 'classify', kind: 'normal'},
+      {source: 'classify', target: 'dispatch', kind: 'normal'},
+      {source: 'dispatch', target: 'k_agent', kind: 'conditional'},
+      {source: 'k_agent', target: 'aggregate', kind: 'conditional'},
+      {source: 'aggregate', target: 'risk_gate', kind: 'normal'},
+      {source: 'risk_gate', target: 'send', kind: 'conditional'},
+    ],
+    groups: {main: {label: '主图', color: '#17405f'}, kb: {label: '科普', color: '#1a5044'},
+             risk: {label: '风险', color: '#8a2a1e'}},
+    subgraph_entry: {k_agent: 'kb_intake', risk_gate: 'gate_in'},
+  };
+  const chatG = await bootPage(chatHtml, {
+    token: TOKEN,
+    routes: {
+      '/api/health': { profile: 'fake', checkpointer: 'memory' },
+      '/api/auth/me': { user: { display_name: '演示用户' } },
+      '/api/graph': GRAPH_STUB,
+      '/api/sessions': { sessions: [] },
+    },
+  });
+  const tabBtn = chatG.els.get('tabGraph');
+  check('chat.html 有「工作流图」这一栏', Boolean(tabBtn && tabBtn.onclick));
+  if (tabBtn && tabBtn.onclick) {
+    tabBtn.onclick();                                   // 切过去（会去取拓扑）
+    await new Promise((r) => setTimeout(r, 80));
+    const svg = chatG.els.get('gSvg');
+    const drawn = svg ? svg.children.length : 0;
+    check('切到工作流图会真的画出来（SVG 里有节点和边）', drawn > 0,
+          `SVG 里还是空的（${drawn} 个子元素）—— 布局或绘制那一步断了`);
+    check('工作流图请求了后端拓扑 /api/graph',
+          chatG.seen.some((u) => u.includes('/api/graph')),
+          '没有请求拓扑 —— 图是画不出来的');
+    check('分组图例渲染出来（主图/科普/风险）',
+          String(chatG.els.get('gLegend') && chatG.els.get('gLegend').innerHTML)
+            .includes('主图'),
+          '图例是空的');
+  }
+  check('拓扑接口不在前端写死（必须来自 /api/graph）',
+        !/const\s+GRAPH\s*=|const\s+EDGES\s*=/.test(stripComments(scriptOf(chatHtml))),
+        '前端出现了写死的拓扑常量 —— 那会和真实流程图漂移');
+
+  // ── G. 正文的"流式"呈现 ──
+  //
+  //  ★ 这个项目**不流式发送正文**，而且这是刻意的：正文必须整段通过风险闸
+  //    （规则 + 三份面板意见）之后才能出站。按 token 往外吐，用户看到的就是
+  //    **未经审查的内容** —— 违规用语、未核实的疗效承诺都会先到他眼前。
+  //    所以做的是**送达之后的显示动画**（打字机），内容安全性一个字都没变。
+  //    这几条锁的就是"别哪天有人把它改成真流式"。
+  console.log('\nG. 正文呈现（送到之后的动画，不是流式发送）');
+  const chatJs = stripComments(scriptOf(chatHtml));
+  check('正文走打字机渲染（final 事件用 addMsgTyped）',
+        /case "final":[\s\S]{0,400}?addMsgTyped\(/.test(chatJs),
+        'final 还是直接整段插入 —— 或者被改成了真流式发送');
+  check('打字机效果可以点掉（长文本不该强迫人干等）',
+        /m\.onclick = finish/.test(chatJs) && /const finish = /.test(chatJs),
+        '没有"点一下显示全文"的出口');
+  check('尊重 prefers-reduced-motion（系统设了减少动效就整段显示）',
+        /prefers-reduced-motion/.test(chatJs),
+        '无障碍设置被忽略');
+  check('后端仍然是"整段 final"，没有改成 token 流',
+        !/event: *chunk|EVENT_CHUNK|stream_token/.test(apiEvents),
+        'events.py 里出现了分片事件 —— 那意味着未经审查的正文开始出站');
 
   console.log(`\n${'═'.repeat(56)}`);
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);

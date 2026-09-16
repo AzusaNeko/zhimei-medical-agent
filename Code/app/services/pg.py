@@ -56,12 +56,30 @@ class PgStore:
     # ══════════════ 会话与权限 ══════════════
     async def get_session(self, session_id: str) -> dict:
         row = await self._fetchrow(
-            "SELECT session_id, user_id, ai_enabled, emergency, status, thread_id "
+            "SELECT session_id, user_id, ai_enabled, emergency, status, thread_id, "
+            "       human_request_count "
             "FROM app.chat_session WHERE session_id = $1", session_id)
         if row is None:
             return {"session_id": session_id, "user_id": None, "ai_enabled": True,
-                    "emergency": False, "status": "active", "thread_id": session_id}
+                    "emergency": False, "status": "active", "thread_id": session_id,
+                    "human_request_count": 0}
         return dict(row)
+
+    async def bump_human_request(self, session_id: str) -> int:
+        """把"用户要求转人工"的次数 +1，返回**累加后**的值。
+
+        ★ 用一条 SQL 自增（`SET n = n + 1 ... RETURNING`），不是"读出来 +1 再写回"：
+          后者在两个请求同时到达时会丢掉一次计数，而这里丢计数意味着
+          用户明明说了三次却一直不转 —— 正是我们要避免的那种"说了没人管"。
+
+        ★ 放在数据库而不是图状态：接管期间**根本不跑图**，
+          而用户恰恰是在那个时候最容易反复要求转人工。
+        """
+        row = await self._fetchrow(
+            """UPDATE app.chat_session SET human_request_count = human_request_count + 1
+               WHERE session_id = $1 RETURNING human_request_count""",
+            _uuid(session_id))
+        return int(row["human_request_count"]) if row else 1
 
     async def ensure_session(self, session_id: str, *, channel: str = "cli",
                              user_id: str | None = None) -> None:

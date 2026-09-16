@@ -92,6 +92,8 @@ class RuleEngine:
         self.risk_tags: dict[str, list[dict]] = config.get("risk_tags", {})
         self.clarify: dict[str, Any] = config.get("clarify", {})
         self.entities: dict[str, list[str]] = config.get("entities", {})
+        #: 用户主动要求转人工：关键词表 + 阈值（连续几次才真的转）
+        self.human_request: dict[str, Any] = config.get("human_request", {})
 
         # 意图关键词兜底表（模型挂掉时用）
         self._keyword_route = {
@@ -109,6 +111,33 @@ class RuleEngine:
         if not isinstance(data, dict):
             raise ValueError(f"规则文件格式不正确：{path}")
         return cls(data)
+
+    # ══════════════ 用户主动要求转人工 ══════════════
+    @property
+    def human_request_threshold(self) -> int:
+        return max(1, int(self.human_request.get("threshold", 3)))
+
+    def is_human_request(self, text: str) -> bool:
+        """用户这句话是不是在**要求**转人工（而不是顺口提到"人工"两个字）。
+
+        ★ 用关键词而不是让模型判断：这件事的结果是"把会话转给真人"，
+          代价高且必须可预测、可复现。模型偶尔把"人工客服几点下班"也判成
+          转人工请求，用户就会被稀里糊涂地转走，而且没法解释为什么。
+
+        ★ 两层过滤，缺一不可：
+          1. 只认**明确要求找人**的说法（"转人工""找个真人"），不收光秃秃的
+             "人工客服" —— 那个词在问句里太常见；
+          2. 句子里出现"几点 / 电话 / 收费"这类词，一律当成**打听信息**而不是
+             要求转接。
+          第一版只做了第 1 层且没收住，"人工客服几点下班"当场被误判。
+          与紧急词表处理"会不会…"问句是同一个取向：**字面匹配必须处理问句**。
+        """
+        raw = (text or "").strip()
+        if not raw:
+            return False
+        if any(w in raw for w in self.human_request.get("exclude_when", [])):
+            return False
+        return any(p and p in raw for p in self.human_request.get("patterns", []))
 
     # ══════════════ 紧急信号 ══════════════
     def match_emergency(self, raw_text: str) -> list[EmergencyHit]:

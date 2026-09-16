@@ -78,6 +78,11 @@ code,.mono{font-family:Consolas,"SF Mono",Menlo,monospace}
            letter-spacing:.2px}
 .msg.user .meta{color:#cfe6e2}
 .msg.bot .meta{color:var(--muted)}
+/* 打字机呈现中的正文：光标闪一下，表示"还在显示"（内容是完整的，只是没显示完） */
+.msg.typing{cursor:pointer}
+.msg.typing::after{content:"▍";margin-left:1px;color:var(--accent);
+                   animation:caret .9s steps(1) infinite}
+@keyframes caret{50%{opacity:0}}
 .tag{display:inline-block;font:11px Consolas,monospace;padding:1px 7px;border-radius:4px;
      margin-right:6px;background:#e8f1fb;color:#17405f}
 .tag.ok{background:#e6f4ee;color:#1a5044}
@@ -118,7 +123,46 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .confirm button{font-size:13px;padding:7px 14px}
 
 /* ── 轨迹区 ── */
-.trace{height:calc(100vh - 132px);min-height:560px}
+.trace{height:calc(100vh - 132px);min-height:560px;display:flex;flex-direction:column}
+
+/* 右栏两个视图：轨迹列表 / 工作流图 */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--line);background:#fcfdfe}
+.tab{flex:1;padding:9px 10px;border:0;background:transparent;font:inherit;font-size:13px;
+     color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+.tab:hover{color:var(--ink)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);
+            background:#fff;font-weight:600}
+#paneTrace{display:flex;flex-direction:column;flex:1;min-height:0}
+#paneGraph{display:flex;flex-direction:column;flex:1;min-height:0}
+.gbar{display:flex;gap:6px;padding:8px 14px;border-bottom:1px solid #eef2f5;background:#fcfdfe}
+.gbar button{padding:4px 9px;font-size:12px;border:1px solid var(--line);border-radius:6px;
+             background:#fff;color:var(--ink);cursor:pointer}
+.gbar button:hover{border-color:var(--accent);color:var(--accent)}
+.glegend{display:flex;flex-wrap:wrap;gap:6px 12px;padding:7px 14px;font-size:11.5px;
+         color:var(--muted);border-bottom:1px solid #eef2f5}
+.glegend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;
+           vertical-align:middle}
+.gwrap{flex:1;overflow:auto;background:#fbfcfd;padding:8px}
+#gSvg{display:block}
+/* 工作流图里的节点：三种状态（未走 / 走过 / 正在走） */
+.gnode rect{fill:#fff;stroke:#cfd8de;stroke-width:1.2;rx:6}
+.gnode text{font:11px "Microsoft YaHei",system-ui,sans-serif;fill:var(--muted);
+            pointer-events:none}
+.gnode.visited rect{stroke-width:1.8}
+.gnode.visited text{fill:var(--ink);font-weight:600}
+.gnode.g-main.visited rect{fill:#eef4f9;stroke:var(--g-main)}
+.gnode.g-kb.visited rect{fill:#e9f4f0;stroke:var(--g-kb)}
+.gnode.g-risk.visited rect{fill:#fbeeeb;stroke:var(--g-risk)}
+.gnode.active rect{stroke-width:2.6;filter:drop-shadow(0 0 4px rgba(23,64,95,.35))}
+.gnode{cursor:pointer}
+.gnode .dur{font:10px Consolas,monospace;fill:#8a5a1e}
+.gedge{stroke:#dde5ea;stroke-width:1.2;fill:none;marker-end:url(#arrow)}
+.gedge.conditional{stroke-dasharray:4 3}
+.gedge.subgraph{stroke:#b9c9d6;stroke-dasharray:2 3}
+/* 走过的边：流动效果 —— 这就是"数据流向"的可视化 */
+.gedge.flowed{stroke:var(--accent);stroke-width:2;stroke-dasharray:7 5;
+              animation:flow .7s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-12}}
 .legend{padding:10px 18px;border-bottom:1px solid #eef2f5;font-size:12px;color:var(--muted);
         display:flex;flex-wrap:wrap;gap:6px 14px;background:#fcfdfe}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;
@@ -275,9 +319,15 @@ button:disabled{opacity:.45;cursor:not-allowed}
     </div>
   </section>
 
-  <!-- ══════ 右：执行轨迹 ══════ -->
+  <!-- ══════ 右：执行轨迹 / 工作流图 ══════ -->
   <aside class="card trace">
     <h2>Agent 执行轨迹 <span class="sub" id="traceMeta">等待提问</span></h2>
+    <div class="tabs">
+      <button class="tab active" id="tabTrace">执行轨迹</button>
+      <button class="tab" id="tabGraph">工作流图</button>
+    </div>
+
+    <div id="paneTrace">
     <div class="legend">
       <span><i style="background:var(--g-main)"></i>主图</span>
       <span><i style="background:var(--g-kb)"></i>科普子图</span>
@@ -293,6 +343,27 @@ button:disabled{opacity:.45;cursor:not-allowed}
       <b style="color:#8a5a1e">★ 这是调试视图</b>：展开后能看到节点写回的原始状态，
       其中可能包含<b>未经审查的中间产物</b>（草稿、审查意见、检索到的原文）。
       顾客只应看到对话区里那份「已审正文」。<b>面向真实顾客时必须关掉这个勾选框。</b>
+    </div>
+    </div><!-- /paneTrace -->
+
+    <!-- ══════ 工作流图：按真实执行轨迹高亮 ══════ -->
+    <div id="paneGraph" hidden>
+      <div class="gbar">
+        <button id="gFit">适应宽度</button>
+        <button id="gZoomIn">放大</button>
+        <button id="gZoomOut">缩小</button>
+        <button id="gClear">清空高亮</button>
+      </div>
+      <div class="glegend" id="gLegend"></div>
+      <div class="gwrap" id="gWrap">
+        <svg id="gSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+      <div class="hint" id="gHint">
+        这张图是<b>从编译好的图里直接导出</b>的（不是手写的），所以不会和真实流程漂移。<br>
+        提问后，实际走过的节点会<b>依次点亮</b>，走过的边会有流动效果 ——
+        绿=主图、青=科普子图、红=风险审查子图。<br>
+        <b style="color:#8a5a1e">点节点</b>可以看它这一步的耗时与是否调用了大模型。
+      </div>
     </div>
   </aside>
 </div>
@@ -576,7 +647,8 @@ function logout() {
   sid = null;
   conversations = [];
   stopWatch();                 // 没会话了，别让定时器空转
-  lastIndex = -1; lastSig = null; lastSeenTaken = false; takeover = false;
+  lastIndex = -1; lastSig = null;
+  resetTakeoverUi();           // 提示条也要收掉（退出后它还挂着就很怪）
   $("messages").innerHTML = "";
   $("convList").innerHTML = "";
   clearTrace(true);
@@ -673,6 +745,21 @@ function setComposeEnabled(on) {
 
 let lastSeenTaken = false;   // 上一次同步时的接管状态（用来判断"翻转"）
 
+/** 把对话区恢复成"没有接管"的样子。
+ *
+ *  ★ 为什么单独抽一个：接管状态原先散在**四个地方** —— `takeover`、`lastSeenTaken`、
+ *    提示条的 `hidden`、输入框的 placeholder。而 `newChat()` / `logout()` 是直接
+ *    写那两个变量的，跳过了 DOM —— 于是提示条**留在屏幕上不走**：
+ *    人工早就结束了，新建一个对话它还在说"人工客服已接管"。
+ *    一个状态有四个副本，就一定会有一条路径漏掉其中一个。
+ *
+ *  ★ 现在的约定：**只有 `syncTakeover()` 能写这四个地方。**
+ *    任何"重置"都必须调它，不许直接给变量赋值。
+ */
+function resetTakeoverUi() {
+  syncTakeover(false, true);
+}
+
 /** 人工接管状态同步。
  *
  *  ★ **输入框不禁用**。用户在被接管后仍然可以继续说话 —— 消息会落库并转给
@@ -688,8 +775,11 @@ function syncTakeover(taken, initial) {
   takeover = taken;
   $("takeoverBar").hidden = !taken;
   if (taken) {
+    // ★ 措辞不写"人工已接入"：`ai_enabled=false` 时工单确实已被接单，
+    //   但这句话还要覆盖"排队中"的情形，而项目里有一条硬约束 ——
+    //   没接单就不能对用户承诺"人工已接入"。"处理中"两种情形都成立。
     $("takeoverText").textContent =
-      "人工客服已接管：AI 暂停自动回复，你发的消息会直接转给客服。";
+      "人工客服处理中：AI 已暂停自动回复，你发的消息会直接转给客服。";
     $("input").placeholder = "继续补充情况，客服会看到…";
   } else {
     $("input").placeholder = DEFAULT_PLACEHOLDER;
@@ -731,8 +821,11 @@ function newChat() {
   sid = null;
   localStorage.removeItem(LS_KEY);
   // 新会话没有历史可对齐，把"已看到的位置"和接管状态一起清掉，
-  // 免得把上一个会话的位置带到新会话上
-  lastIndex = -1; lastSig = null; lastSeenTaken = false; takeover = false;
+  // 免得把上一个会话的位置带到新会话上。
+  // ★ 接管状态必须走 resetTakeoverUi()（它会一并隐藏提示条），
+  //   不能直接给变量赋值 —— 那正是"新建对话还显示人工已接管"的原因。
+  lastIndex = -1; lastSig = null;
+  resetTakeoverUi();
   $("sidLabel").textContent = "新对话";
   $("messages").innerHTML = "";
   setComposeEnabled(true);
@@ -767,6 +860,83 @@ function addMsg(kind, text, meta) {
   $("messages").scrollTop = $("messages").scrollHeight;
   return m;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   正文的"流式"呈现
+   ══════════════════════════════════════════════════════════════
+
+   ★ 先说清楚它与"流式输出"的区别，免得后来人以为这是在糊弄：
+
+     这个项目**不流式发送正文**，而且这是刻意的 —— 正文必须整段通过风险闸
+     （规则 + 三份面板意见）之后才能出站。如果按 token 往外吐，用户看到的
+     就是**未经审查的内容**：违规用语、未核实的疗效承诺、还没过隐私检查的
+     个人信息，都会先到用户眼前。那等于把整个风控前提拆掉。
+     README 里把这条写成"铁律"：**过程可以流式，正文必须整段审后发送。**
+
+     所以这里做的是**送达之后的呈现动画**：正文仍然是一个完整的 final 事件，
+     前端把它逐字显示出来，只是让等待感更接近"在说话"。
+     内容安全性与"整段送达"完全不变 —— 一个字的顺序都没提前。
+
+   ★ 三个细节：
+     · 总时长固定（不随文本长度线性增长），长答案不会让人等到不耐烦；
+     · **可以点掉**：长医疗文本没人愿意干等，点一下立刻显示全文；
+     · 尊重 `prefers-reduced-motion`：系统设了减少动效就直接整段显示。
+*/
+const TYPE_MS = 900;          // 整段正文的目标呈现时长
+const TYPE_MIN_CHUNK = 2;     // 每次至少吐几个字（太碎会像卡顿）
+
+function prefersReducedMotion() {
+  try {
+    return window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch (e) { return false; }
+}
+
+/** 追加一条"打字机"呈现的正文消息。返回节点。 */
+function addMsgTyped(kind, text, meta) {
+  const full = String(text || "");
+  // 短文本、或系统要求减少动效 → 不做动画，直接整段（动画是锦上添花，不该添乱）
+  if (full.length < 24 || prefersReducedMotion()) return addMsg(kind, full, meta);
+
+  const m = el("div", "msg " + kind);
+  const node = document.createTextNode("");
+  m.appendChild(node);
+  m.classList.add("typing");
+  if (meta) {
+    const s = el("span", "meta");
+    meta.forEach((t, i) => {
+      if (i) s.appendChild(document.createTextNode("  "));
+      if (typeof t === "string") s.appendChild(document.createTextNode(t));
+      else { const b = el("span", "tag " + (t.cls || ""), t.text); s.appendChild(b); }
+    });
+    m.appendChild(s);
+  }
+  $("messages").appendChild(m);
+
+  const tick = Math.max(16, Math.round(TYPE_MS / Math.ceil(full.length / TYPE_MIN_CHUNK)));
+  let i = 0;
+  let timer = null;
+  const finish = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    node.data = full;
+    m.classList.remove("typing");
+    m.onclick = null;
+    $("messages").scrollTop = $("messages").scrollHeight;
+  };
+  const step = () => {
+    i = Math.min(full.length, i + TYPE_MIN_CHUNK);
+    node.data = full.slice(0, i);
+    $("messages").scrollTop = $("messages").scrollHeight;
+    if (i >= full.length) { finish(); return; }
+    timer = setTimeout(step, tick);
+  };
+  // 点一下直接看全文 —— 长文本不该强迫人等着
+  m.onclick = finish;
+  m.title = "点一下直接显示全文";
+  timer = setTimeout(step, tick);
+  return m;
+}
+
 function setStatus(text) {
   $("statusbar").classList.toggle("show", !!text);
   if (text) $("statusText").textContent = text;
@@ -783,9 +953,194 @@ function clearTrace(showHint) {
   $("traceMeta").textContent = showHint ? "等待提问" : "执行中…";
   $("traceHint").style.display = showHint ? "block" : "none";
   nodeSeq = 0;
+  graphReset();      // 工作流图的高亮也要跟着清掉（同一轮对话的一份记录）
 }
+
+/* ══════════════════════════════════════════════════════════════
+   工作流执行图：把真实拓扑画出来，并按执行轨迹实时高亮
+   ══════════════════════════════════════════════════════════════
+
+   ★ 拓扑从 `/api/graph` 拿（后端从**编译好的图**里导出），不是前端写死的：
+     写死的那份迟早漂移，而一张少了边的流程图比没有图更糟 ——
+     它会让人对执行过程产生错误判断。前端只负责布局和上色。
+
+   ★ 布局是自己算的（分层 DAG）而不是手填坐标：节点有 50 多个，
+     手填坐标意味着"图里加一个节点就得回来改坐标"，又是一处必然漂移的地方。
+     分层规则很简单：层号 = 从入口算起的最长路径长度。
+     它不保证好看，但保证**每次都能画出来**，包括以后新增的节点。
+*/
+let graphData = null;     // /api/graph 的结果
+let graphPos = {};        // 节点 id → {x, y}
+let graphVisited = {};    // 节点 id → {seq, ms, llm}
+let graphLastNode = null; // 上一个执行过的节点（用来点亮走过的那条边）
+let graphView = {x: 0, y: 0, k: 1};
+
+const GNODE_W = 132, GNODE_H = 30, GAP_X = 46, GAP_Y = 12;
+
+/** 分层：层号 = 从"没有入边"的节点出发的最长路径。 */
+function graphLayout() {
+  const nodes = graphData.nodes;
+  const outs = {}, indeg = {};
+  nodes.forEach((n) => { outs[n.id] = []; indeg[n.id] = 0; });
+  graphData.edges.forEach((e) => {
+    if (outs[e.source] && outs[e.source].indexOf(e.target) < 0) {
+      outs[e.source].push(e.target);
+      indeg[e.target] = (indeg[e.target] || 0) + 1;
+    }
+  });
+  const layer = {};
+  nodes.forEach((n) => { layer[n.id] = 0; });
+  // 最多迭代节点数次：既算出最长路径，也天然避免了环导致的死循环
+  for (let it = 0; it < nodes.length; it++) {
+    let moved = false;
+    for (const e of graphData.edges) {
+      if (!(e.source in layer) || !(e.target in layer)) continue;
+      if (layer[e.target] < layer[e.source] + 1) {
+        layer[e.target] = layer[e.source] + 1;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  const cols = {};
+  const order = {main: 0, kb: 1, risk: 2};
+  nodes.forEach((n) => {
+    const L = layer[n.id] || 0;
+    (cols[L] = cols[L] || []).push(n);
+  });
+  graphPos = {};
+  Object.keys(cols).forEach((L) => {
+    // 同一层内按分组排一下，让子图的节点聚在一起，读起来不至于跳来跳去
+    cols[L].sort((a, b) => (order[a.group] - order[b.group]) || a.id.localeCompare(b.id));
+    cols[L].forEach((n, i) => {
+      graphPos[n.id] = {x: 16 + L * (GNODE_W + GAP_X), y: 16 + i * (GNODE_H + GAP_Y)};
+    });
+  });
+  const maxX = Math.max(...Object.values(graphPos).map((p) => p.x)) + GNODE_W + 16;
+  const maxY = Math.max(...Object.values(graphPos).map((p) => p.y)) + GNODE_H + 16;
+  graphData._size = {w: maxX, h: maxY};
+}
+
+function graphEl(tag, attrs) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function graphDraw() {
+  if (!graphData) return;
+  const svg = $("gSvg");
+  const {w, h} = graphData._size;
+  svg.innerHTML = "";
+  svg.setAttribute("viewBox", `${graphView.x} ${graphView.y} ${w / graphView.k} ${h / graphView.k}`);
+  svg.setAttribute("width", Math.round(w / graphView.k));
+  svg.setAttribute("height", Math.round(h / graphView.k));
+
+  const defs = graphEl("defs", {});
+  const marker = graphEl("marker", {id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5",
+                                    markerWidth: "6", markerHeight: "6", orient: "auto"});
+  marker.appendChild(graphEl("path", {d: "M0,0 L10,5 L0,10 z", fill: "#cfd8de"}));
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  // 先画边（压在节点下面）
+  for (const e of graphData.edges) {
+    const a = graphPos[e.source], b = graphPos[e.target];
+    if (!a || !b) continue;
+    const x1 = a.x + GNODE_W, y1 = a.y + GNODE_H / 2;
+    const x2 = b.x, y2 = b.y + GNODE_H / 2;
+    // 折线：先横后竖再横，比贝塞尔更容易看清"从哪一层到哪一层"
+    const mid = x1 + Math.max(12, (x2 - x1) / 2);
+    const d = `M${x1},${y1} L${mid},${y1} L${mid},${y2} L${x2},${y2}`;
+    const cls = "gedge " + e.kind
+      + (graphVisited[e.source] && graphVisited[e.target] ? " flowed" : "");
+    const p = graphEl("path", {d, class: cls});
+    p.dataset.from = e.source;
+    p.dataset.to = e.target;
+    svg.appendChild(p);
+  }
+  // 再画节点
+  for (const n of graphData.nodes) {
+    const p = graphPos[n.id];
+    if (!p) continue;
+    const meta = NODES[n.id] || {n: n.id, llm: 0, d: "（未登记的节点）"};
+    const g = graphEl("g", {class: `gnode g-${n.group}` + (graphVisited[n.id] ? " visited" : ""),
+                            transform: `translate(${p.x},${p.y})`});
+    g.appendChild(graphEl("rect", {width: GNODE_W, height: GNODE_H, rx: 6}));
+    const t = graphEl("text", {x: 8, y: 19});
+    t.textContent = (meta.n || n.id).slice(0, 12);
+    g.appendChild(t);
+    if (meta.llm) {
+      const dot = graphEl("circle", {cx: GNODE_W - 9, cy: 9, r: 3, fill: "#e0a94a"});
+      dot.appendChild(graphEl("title", {})).textContent = "会调用大模型（烧 token）";
+      g.appendChild(dot);
+    }
+    if (graphVisited[n.id]) {
+      const dt = graphEl("text", {x: GNODE_W - 8, y: 19, "text-anchor": "end", class: "dur"});
+      dt.textContent = (graphVisited[n.id].ms || 0) + "ms";
+      g.appendChild(dt);
+      const title = graphEl("title", {});
+      title.textContent = `${meta.n}（${n.id}）\n第 ${graphVisited[n.id].seq} 个执行`
+        + `${meta.llm ? " · 调用大模型" : ""}\n用时 ${graphVisited[n.id].ms}ms\n${meta.d}`;
+      g.appendChild(title);
+    }
+    svg.appendChild(g);
+  }
+  $("gLegend").innerHTML = Object.keys(graphData.groups)
+    .map((k) => `<span><i style="background:${graphData.groups[k].color}"></i>`
+                + `${graphData.groups[k].label}</span>`).join("");
+}
+
+/** 把一个节点标成"走过了"，并点亮走到它的那条边。 */
+function graphMark(nodeId, ms) {
+  if (!graphData) return;
+  nodeSeq = nodeSeq;   // 两个视图共用序号，这里不需要额外维护
+  graphVisited[nodeId] = {seq: Object.keys(graphVisited).length + 1, ms: ms || 0};
+  const meta = NODES[nodeId] || {};
+  graphVisited[nodeId].llm = !!meta.llm;
+  graphLastNode = nodeId;
+  if ($("paneGraph").hidden) return;   // 图没显示就先只记状态，切过去时再画
+  graphDraw();
+}
+
+function graphReset() {
+  graphVisited = {};
+  graphLastNode = null;
+  if (graphData && !$("paneGraph").hidden) graphDraw();
+}
+
+async function graphEnsure() {
+  if (graphData) return true;
+  try {
+    const r = await api("/api/graph");
+    graphData = await r.json();
+    graphLayout();
+    graphDraw();
+    return true;
+  } catch (e) {
+    $("gWrap").innerHTML = `<div class="trace-empty">工作流图加载失败：${e.message}</div>`;
+    return false;
+  }
+}
+
+function switchPane(which) {
+  const isGraph = which === "graph";
+  $("tabTrace").classList.toggle("active", !isGraph);
+  $("tabGraph").classList.toggle("active", isGraph);
+  $("paneTrace").hidden = isGraph;
+  $("paneGraph").hidden = !isGraph;
+  if (isGraph) graphEnsure();
+}
+$("tabTrace").onclick = () => switchPane("trace");
+$("tabGraph").onclick = () => switchPane("graph");
+$("gFit").onclick = () => { graphView = {x: 0, y: 0, k: 1}; graphDraw(); };
+$("gZoomIn").onclick = () => { graphView.k = Math.min(2.5, graphView.k * 1.25); graphDraw(); };
+$("gZoomOut").onclick = () => { graphView.k = Math.max(0.4, graphView.k / 1.25); graphDraw(); };
+$("gClear").onclick = () => graphReset();
+
 function addNode(d) {
   const meta = NODES[d.node] || {n: d.node, g: "main", llm: 0, d: "（未登记的节点）"};
+  graphMark(d.node, d.ms);      // 工作流图同步点亮（切到图那一栏就能看到整条路径）
   const li = el("li", "node g-" + meta.g);
   nodeSeq += 1;
   li.appendChild(el("span", "idx", String(nodeSeq)));
@@ -1035,7 +1390,9 @@ function handle(name, d) {
       setStatus(d.text || "");
       return true;
     case "final":
-      addMsg("bot", d.text || "", [
+      // ★ 正文用打字机呈现：内容是**整段审后送达**的（见 addMsgTyped 的说明），
+      //   这里只是送达之后的显示动画。
+      addMsgTyped("bot", d.text || "", [
         {text: "已审正文", cls: "ok"},
         "凭据 " + String(d.token || "").slice(0, 12) + "…",
         "整段送达（不流式）"

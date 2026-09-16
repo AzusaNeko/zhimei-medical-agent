@@ -152,6 +152,7 @@ class FakePg:
                 "channel": channel, "ai_enabled": True, "emergency": False,
                 "status": "active", "thread_id": session_id,
                 "started_at": now, "last_active_at": now,
+                "human_request_count": 0,
             }
         else:
             # ★ 只更新 last_active_at，**不要动 channel / user_id** ——
@@ -174,7 +175,14 @@ class FakePg:
             "thread_id": session_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "last_active_at": datetime.now(timezone.utc).isoformat(),
+            "human_request_count": 0,
         })
+
+    async def bump_human_request(self, session_id: str) -> int:
+        """与 PgStore 同形：+1 并返回累加后的值。"""
+        sess = await self.get_session(session_id)
+        sess["human_request_count"] = int(sess.get("human_request_count") or 0) + 1
+        return sess["human_request_count"]
 
     async def load_auth(self, session_id: str) -> dict:
         return {"verified": True, "user_id": "U-0001",

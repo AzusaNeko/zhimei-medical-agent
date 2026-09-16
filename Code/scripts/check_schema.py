@@ -66,6 +66,7 @@ MIGRATED_COLUMNS: list[tuple[str, str, str, str]] = [
     ("ops", "agent_user", "last_login_at", "timestamp with time zone"),
     ("app", "review_audit", "escalation_reason", "text"),
     ("ops", "handoff_ticket", "is_test", "boolean"),
+    ("app", "chat_session", "human_request_count", "integer"),
 ]
 
 #: 引用了"后加的列"的索引 —— 它们必须在建列之后创建，所以会被上面这个列表连累。

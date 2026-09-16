@@ -36,11 +36,13 @@ from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from ..graph import progress
+from ..prompts import emergency as EM
 from ..runtime import Runtime
 from ..services import text as T
 from ..services import trace
 from ..services.auth import Principal
 from .security import current_user
+from .graph_topology import build_topology as _topology
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
                      EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch,
                      node_detail, ping, sse, takeover_event)
@@ -116,6 +118,20 @@ async def list_sessions(request: Request,
     return {"sessions": rows, "count": len(rows)}
 
 
+@router.get("/graph", response_model=dict)
+async def graph_topology(request: Request,
+                         user: Principal = Depends(current_user)) -> dict:
+    """工作流拓扑（给前端画执行图用）。
+
+    ★ 是从**编译好的图**上读出来的，不是手写的常量 —— 手写的那份迟早会漂移，
+      而一张少了边的流程图比没有图更糟（它会让人对执行过程产生错误判断）。
+      详见 `graph_topology.py` 的说明。
+
+    需要登录：拓扑本身不敏感，但这个接口没有任何理由对未登录用户开放。
+    """
+    return _topology(_rt(request))
+
+
 @router.get("/sessions/{session_id}", response_model=dict)
 async def get_session(session_id: str, request: Request, limit: int = 10,
                       user: Principal = Depends(current_user)) -> dict:
@@ -154,6 +170,19 @@ async def chat_stream(session_id: str, body: ChatIn, request: Request,
     #   放在 try_begin 之前 —— 这条路根本不占图的执行名额，没必要抢锁，
     #   也就不会因为"上一轮还在跑"而把用户的话拒掉（那种场景恰恰最需要收下它）。
     takeover = await _takeover_info(rt, session_id)
+
+    # ★ 用户主动要求转人工：先安抚、够次数才真转，**不跑图**。
+    #   紧急信号优先：一句话里带"人工"不意味着可以放过急诊 ——
+    #   所以先判紧急，是紧急就照旧走图（急诊 + 转人工并行），不走这条。
+    if rt.deps.rules.is_human_request(body.text):
+        try:
+            is_emergency = bool(rt.deps.rules.match_emergency(T.clean(body.text or "")))
+        except Exception:  # noqa: BLE001
+            is_emergency = True   # 判不出来就当紧急处理（走图，更安全）
+        if not is_emergency:
+            return _sse_response(_human_request_source(
+                rt, session_id, body.text, taken_over=takeover is not None))
+
     if takeover is not None:
         return _sse_response(_takeover_source(rt, session_id, body.text, takeover))
 
@@ -232,6 +261,76 @@ def _takeover_notice(info: dict) -> tuple[str, bool, str | None]:
                 f"客服会在这里继续回复您。"), True, agent_name
     return ("已收到，并已排队转给人工客服。AI 已暂停自动回复；"
             "客服接单后会看到您刚才补充的内容。"), False, None
+
+
+async def _human_request_source(rt: Runtime, session_id: str, text: str, *,
+                                taken_over: bool) -> AsyncIterator[str]:
+    """用户**主动要求转人工**时的处理：先安抚、够次数才真转（不跑图）。
+
+    ★ 为什么不交给图去判断：这件事的结果是"把会话转给真人"，代价高、且必须
+      可预测可复现。走规则 + 固定话术，既不烧 token，也不会出现
+      "模型今天心情好就把人转走了"。
+
+    ★ 为什么要连续 N 次：中文里"人工"两个字太随意（"人工客服几点下班"、
+      "人工费怎么算"），一次就转会让转人工率虚高、坐席被无谓占用 ——
+      与项目里"二次复核白升"那个问题是同一类。
+
+    ★ 但门槛**必须如实告诉用户**（见 HUMAN_REQUEST_REASSURE）：
+      含糊地说"稍后为您转接"再拖三次，那是在骗人。
+
+    ★ 紧急情况不走这里：调用方已经先判过紧急信号（见 chat_stream），
+      宁可走图的急诊路径，也不能因为一句话里带"人工"就把急诊降级成排队。
+    """
+    saved = T.clean(text or "")
+    try:
+        await rt.deps.pg.save_message(session_id=session_id, turn_id=str(uuid.uuid4()),
+                                      role="user", content=saved,
+                                      meta={"channel": "api", "human_request": True})
+    except Exception:  # noqa: BLE001
+        logger.exception("转人工请求落库失败（session=%s）", session_id)
+
+    n = await rt.deps.pg.bump_human_request(session_id)
+    total = rt.deps.rules.human_request_threshold
+
+    if taken_over:
+        # AI 已经停了，人已经在处理/排队 —— 没什么可"转"的了，
+        # 能给的就是安抚 + 让他知道这条也被记下了。
+        notice = EM.HUMAN_REQUEST_ALREADY.format(n=n)
+        await _save_notice(rt, session_id, notice)
+        yield sse(*takeover_event(notice, accepted=True))
+        yield sse(EVENT_DONE, {"session_id": session_id, "turn_id": None})
+        return
+
+    if n < total:
+        notice = EM.HUMAN_REQUEST_REASSURE.format(n=n, total=total)
+        await _save_notice(rt, session_id, notice)
+        # ★ 用 final 而不是自定义事件：这是一次**正常的 AI 回复**
+        #   （只不过措辞是固定模板），前端不需要为它多写一套渲染。
+        yield sse(EVENT_FINAL, {"text": notice, "token": "", "kind": "template",
+                                "citations": [], "handoff": False})
+        yield sse(EVENT_DONE, {"session_id": session_id, "turn_id": None})
+        return
+
+    # 达到阈值：真的转交。★ 用户主动要求的转交**当场停掉 AI**，
+    # 不等坐席接单 —— 与"系统推断出来的转交"刻意不同：
+    # 后者（急诊、风险高）AI 可能还是最快的帮手，所以让它答到人工接手为止；
+    # 而用户明确说了"我要人"，再让 AI 抢话就是不尊重他的选择。
+    ticket = await _force_handoff(rt, session_id, reason="user_requested", priority="P1")
+    await rt.deps.pg.set_ai_enabled(session_id, False)
+    await _save_notice(rt, session_id, EM.HUMAN_REQUEST_GRANTED)
+    yield sse(EVENT_HANDOFF, {**ticket, "text": EM.HUMAN_REQUEST_GRANTED,
+                              "reason": "user_requested", "priority": "P1"})
+    yield sse(EVENT_DONE, {"session_id": session_id, "turn_id": None})
+
+
+async def _save_notice(rt: Runtime, session_id: str, notice: str) -> None:
+    """把固定话术也落库（否则对话记忆里只有用户单方面的发言）。"""
+    try:
+        await rt.deps.pg.save_message(session_id=session_id, turn_id=str(uuid.uuid4()),
+                                      role="assistant", content=notice,
+                                      review_kind="template")
+    except Exception:  # noqa: BLE001
+        logger.exception("固定话术落库失败（session=%s）", session_id)
 
 
 async def _takeover_source(rt: Runtime, session_id: str, text: str, info: dict,

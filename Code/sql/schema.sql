@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS app.chat_session (
   status         TEXT NOT NULL DEFAULT 'active',
   started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- ★ 用户主动要求转人工的次数（跨轮累计）。连续达到阈值才真的转 ——
+  --   中文里"人工"两个字太随意（"人工客服几点下班"），一次就转会把坐席淹掉。
+  --   为什么放数据库而不是图状态：**接管期间根本不跑图**，
+  --   而用户恰恰是在那个阶段最可能反复要求转人工。
+  human_request_count INT NOT NULL DEFAULT 0,
   closed_at      TIMESTAMPTZ
 );
 
@@ -429,6 +434,9 @@ ALTER TABLE app.review_audit ADD COLUMN IF NOT EXISTS escalation_reason TEXT;
 
 -- 测试工单标记（见 README「测试工单为什么要单开一列」）
 ALTER TABLE ops.handoff_ticket ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+
+-- 用户主动要求转人工的次数（见 README「用户主动要求转人工」）
+ALTER TABLE app.chat_session ADD COLUMN IF NOT EXISTS human_request_count INT NOT NULL DEFAULT 0;
 
 -- ★ 依赖新列的索引必须建在**建列之后**。
 --   这条规则不是洁癖：`CREATE INDEX` 引用了不存在的列会直接报错并**中断整个
