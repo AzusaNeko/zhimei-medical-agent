@@ -68,6 +68,30 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .empty{color:var(--muted);padding:24px 18px;font-size:13px}
 .toast{position:fixed;right:20px;bottom:20px;max-width:380px;background:var(--ink);color:#fff;
        padding:12px 16px;border-radius:8px;font-size:13px;z-index:20}
+
+/* ── 登录浮层 ── */
+.auth{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+      background:rgba(23,47,64,.5);backdrop-filter:blur(3px)}
+.auth[hidden]{display:none}
+.auth-card{width:min(430px,92vw);background:#fff;border-radius:14px;padding:26px 28px 20px;
+           box-shadow:0 18px 60px rgba(12,30,42,.3)}
+.auth-card h1{margin:0 0 6px;font-size:19px}
+.auth-card .sub{margin:0 0 18px;font-size:12.5px;color:var(--muted);line-height:1.7}
+.auth-card .field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.auth-card .field label{font-size:12.5px;color:var(--muted)}
+.auth-card .field input{padding:9px 11px;border:1px solid var(--line);border-radius:8px;font:inherit}
+.auth-card .field input:focus{outline:none;border-color:#8fbfb3;box-shadow:0 0 0 3px #e8f2f0}
+.auth-card button{width:100%;padding:11px;font-size:14.5px;margin-top:4px}
+.auth-msg{min-height:20px;font-size:12.5px;margin-top:10px;line-height:1.6;color:var(--bad)}
+.auth-tip{margin-top:14px;padding:9px 11px;background:#f7faf9;border:1px solid #e3ecea;
+          border-radius:8px;font-size:11.5px;color:var(--muted);line-height:1.8}
+.auth-tip code{color:var(--accent)}
+/* 顶栏身份显示 */
+.whoami{display:flex;align-items:center;gap:7px;font-size:12.5px}
+.role-badge{font:11px Consolas,monospace;padding:2px 8px;border-radius:4px;
+            background:#e8f1fb;color:#17405f}
+.raw-flag{font:11px Consolas,monospace;padding:2px 8px;border-radius:4px;
+          background:#ffe3de;color:#8a2a1e}
 .toast.alert{background:var(--p0)}
 .toast:empty{display:none}
 @media(max-width:1000px){.layout{grid-template-columns:1fr}}
@@ -80,18 +104,39 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <b>坐席工作台 · 高风险回复处理</b>
   </div>
   <div class="tools">
-    <label>角色
-      <select id="role">
-        <option value="service">客服坐席 service</option>
-        <option value="doctor">值班医师 doctor</option>
-        <option value="compliance">合规 compliance</option>
-      </select>
-    </label>
-    <input id="agentName" value="演示坐席" size="10" aria-label="坐席名称">
+    <!-- ★ 这里原来是一个「角色」下拉框（service / doctor / compliance）。
+         那是一个真实的安全洞：角色由**客户端自己声明**，改个下拉框就能拿到
+         未脱敏的手机号。现在角色来自登录令牌 + 数据库，下面只做**显示**。 -->
+    <span class="whoami" id="whoami" hidden>
+      <b id="agentName">—</b>
+      <span class="role-badge" id="agentRole">—</span>
+      <span class="raw-flag" id="rawFlag" hidden>可见明文 PII</span>
+    </span>
     <span><i class="dot" id="connDot"></i> <span id="connText">未连接</span></span>
     <button id="refresh">刷新</button>
+    <button id="logout" hidden>退出</button>
   </div>
 </header>
+
+<!-- ══════ 坐席登录 ══════ -->
+<div class="auth" id="authLayer" hidden>
+  <form class="auth-card" id="loginForm">
+    <h1>坐席登录</h1>
+    <p class="sub">角色由后台账号决定，登录后自动生效。<br>
+      演示账号见 <code>README</code>；四个角色各一个，口令相同。</p>
+    <div class="field"><label>邮箱</label>
+      <input id="loginEmail" type="email" autocomplete="username" required></div>
+    <div class="field"><label>密码</label>
+      <input id="loginPwd" type="password" autocomplete="current-password" required></div>
+    <button class="primary" type="submit" id="loginBtn">登录</button>
+    <div class="auth-msg" id="authMsg"></div>
+    <div class="auth-tip">
+      客服 <code>service@zhimei.test</code> · 医师 <code>doctor@zhimei.test</code><br>
+      合规 <code>compliance@zhimei.test</code> · 管理员 <code>admin@zhimei.test</code><br>
+      口令均为 <code>zhimei-demo-2026</code>
+    </div>
+  </form>
+</div>
 
 <div class="metrics" id="metrics"></div>
 
@@ -115,13 +160,91 @@ const state = { tickets: [], current: null, detail: null };
 const $ = (id) => document.getElementById(id);
 
 function headers() {
-  // 只传 ASCII 的 id 与 role —— HTTP 头不能带中文，显示名由前端本地维护
-  return {
-    "Content-Type": "application/json",
-    "X-Agent-Role": $("role").value,
-    "X-Agent-Id": "demo-" + $("role").value,
-  };
+  // ★ 角色**不再由这里声明**。这里只带令牌，角色由服务端从数据库读。
+  //   原来的写法是 X-Agent-Role: $("role").value —— 改个下拉框就能拿到
+  //   未脱敏的手机号，那是本项目最严重的一个洞。
+  const h = {"Content-Type": "application/json"};
+  const t = localStorage.getItem("zhimei.agentToken");
+  if (t) h["Authorization"] = "Bearer " + t;
+  return h;
 }
+
+let me = null;   // 当前坐席（登录后由服务端返回）
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, opts);
+  if (r.status === 401) {
+    localStorage.removeItem("zhimei.agentToken");
+    showAuth("登录已过期，请重新登录");
+    throw new Error("unauthorized");
+  }
+  return r;
+}
+
+function showAuth(msg) {
+  document.getElementById("authLayer").hidden = false;
+  document.getElementById("logout").hidden = true;
+  const el = document.getElementById("authMsg");
+  el.textContent = msg || "";
+}
+
+function hideAuth() {
+  document.getElementById("authLayer").hidden = true;
+  document.getElementById("logout").hidden = false;
+  document.getElementById("whoami").hidden = false;
+}
+
+async function doLogin(ev) {
+  ev.preventDefault();
+  const msg = document.getElementById("authMsg");
+  msg.textContent = "登录中…";
+  try {
+    const r = await fetch("/ops/auth/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        email: document.getElementById("loginEmail").value.trim(),
+        password: document.getElementById("loginPwd").value,
+      })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = d.message || "登录失败"; return; }
+    localStorage.setItem("zhimei.agentToken", d.access_token);
+    me = d.agent;
+    msg.textContent = "";
+    applyIdentity();
+    hideAuth();
+    await bootData();
+  } catch (e) {
+    msg.textContent = "网络错误：" + e.message;
+  }
+}
+
+function applyIdentity() {
+  const role = (me && me.role) || "?";
+  document.getElementById("agentName").textContent =
+    (me && me.name) || (me && me.agent_id) || "—";
+  document.getElementById("agentRole").textContent = role;
+  // 一眼看出当前身份能不能看到明文 PII —— 这是坐席最需要心里有数的一件事
+  document.getElementById("rawFlag").hidden = !["doctor", "compliance", "admin"].includes(role);
+  document.title = `坐席工作台 · ${role}`;
+}
+
+function logout() {
+  localStorage.removeItem("zhimei.agentToken");
+  me = null;
+  showAuth("已退出登录");
+  document.getElementById("queue").innerHTML = '<div class="empty">请先登录</div>';
+  document.getElementById("detail").innerHTML = '<div class="empty">请先登录</div>';
+}
+
+async function bootData() {
+  await loadQueue();
+  await loadMetrics();
+  connectStream();
+}
+
+document.getElementById("loginForm").addEventListener("submit", doLogin);
+document.getElementById("logout").onclick = logout;
 let toastTimer;
 function toast(text, isAlert) {
   const el = $("toast");
@@ -228,7 +351,7 @@ function renderDetail() {
       ${rp.draft ? `<h3 style="margin-top:12px">AI 未发出的草稿</h3><div class="msg system">${esc(rp.draft)}</div>` : ""}
     </div>
     <div class="section">
-      <h3>对话记录${$("role").value === "service" ? "（敏感信息已脱敏）" : ""}</h3>
+      <h3>对话记录${me && me.role === "service" ? "（敏感信息已脱敏）" : ""}</h3>
       ${msgs || '<div class="sub">（无）</div>'}
     </div>
     <div class="section">
@@ -361,16 +484,31 @@ function handleEvent(chunk) {
 }
 
 $("refresh").onclick = () => { loadQueue(); if (state.current) openTicket(state.current); };
-$("role").onchange = () => {
-  state.current = null;
-  $("detail").innerHTML = '<div class="empty">从左侧选择一个工单</div>';
-  loadQueue();
-  if (state.detail) openTicket(state.detail.ticket.ticket_id);
-};
 
-loadQueue();
-fetch("/ops/metrics", { headers: headers() }).then((r) => r.json()).then(renderMetrics).catch(() => {});
-connect();
+async function loadMetrics() {
+  try {
+    const r = await api("/ops/metrics", { headers: headers() });
+    renderMetrics(await r.json());
+  } catch (e) { /* 401 已经弹回登录页，这里不必再报 */ }
+}
+
+// ★ 先验令牌再干活。没登录就去拉队列只会拿到 401 再被弹回登录页，
+//   用户会看到界面闪一下才跳走。
+(async function start() {
+  const t = localStorage.getItem("zhimei.agentToken");
+  if (!t) { showAuth(); return; }
+  try {
+    const r = await fetch("/ops/auth/me", {headers: {Authorization: "Bearer " + t}});
+    if (!r.ok) { localStorage.removeItem("zhimei.agentToken"); showAuth(); return; }
+    const d = await r.json();
+    me = d.agent;
+    applyIdentity();
+    hideAuth();
+    await bootData();
+  } catch (e) {
+    showAuth("无法连接服务，请稍后重试");
+  }
+})();
 </script>
 </body>
 </html>

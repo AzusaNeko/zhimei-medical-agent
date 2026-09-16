@@ -23,7 +23,7 @@ import time
 import uuid
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
@@ -32,6 +32,8 @@ from ..graph import progress
 from ..runtime import Runtime
 from ..services import text as T
 from ..services import trace
+from ..services.auth import Principal
+from .security import current_user
 from .events import (EVENT_BLOCKED, EVENT_DONE, EVENT_ERROR, EVENT_FINAL, EVENT_HANDOFF,
                      EVENT_NODE, EVENT_STATUS, SSE_HEADERS, error_event, map_patch,
                      node_detail, ping, sse)
@@ -62,13 +64,20 @@ async def health(request: Request) -> HealthOut:
 
 
 @router.post("/sessions", response_model=SessionOut)
-async def create_session(body: CreateSessionIn, request: Request) -> SessionOut:
+async def create_session(body: CreateSessionIn, request: Request,
+                         user: Principal = Depends(current_user)) -> SessionOut:
+    """建会话。**归属由令牌决定，不接受客户端传入的 user_id。**
+
+    ★ 原来 user_id 是从请求体里读的（`body.user_id`）—— 那等于谁都能把会话
+      挂到别人名下，进而用别人的身份去改预约。现在一律取令牌里的 user_id，
+      `CreateSessionIn.user_id` 仅作为兼容字段保留，**被忽略**。
+    """
     rt = _rt(request)
     session_id = str(uuid.uuid4())
     ensure = getattr(rt.deps.pg, "ensure_session", None)
     if ensure is not None:
         try:
-            await ensure(session_id, channel=body.channel, user_id=body.user_id)
+            await ensure(session_id, channel=body.channel, user_id=user.user_id)
         except Exception:  # noqa: BLE001
             # 业务库不可用不应阻断建会话（演示与本地开发常见）
             pass
@@ -79,25 +88,30 @@ async def create_session(body: CreateSessionIn, request: Request) -> SessionOut:
 
 
 @router.get("/sessions")
-async def list_sessions(request: Request, limit: int = 30,
-                        channel: str | None = None) -> dict:
-    """会话列表（"新对话 / 切换对话"用）。
+async def list_sessions(request: Request,
+                        limit: int = 30,
+                        channel: str | None = None,
+                        user: Principal = Depends(current_user)) -> dict:
+    """当前用户的会话列表（"新对话 / 切换对话"用）。
 
     标题是**第一条用户消息**，不需要用户手动命名 —— 对话类产品里手动命名
     几乎没人用，而第一句话天然就是这一轮的意图。还没说话的会话 title 为空，
     前端显示成"（新对话）"。
 
-    ★ 现在没有鉴权层，列出的是**全部**会话，只适用于演示。
-      生产环境必须按登录用户过滤，否则等于把别人的对话列表摊开。
+    ★ 必须按登录用户过滤：这是上一版留下的缺口 —— 当时没有鉴权层，
+      接口列出的是**全部**会话，等于把所有人的对话列表摊开。
     """
     rt = _rt(request)
-    rows = await rt.deps.pg.list_sessions(limit=max(1, min(limit, 100)), channel=channel)
+    rows = await rt.deps.pg.list_sessions(limit=max(1, min(limit, 100)), channel=channel,
+                                          user_id=user.user_id)
     return {"sessions": rows, "count": len(rows)}
 
 
 @router.get("/sessions/{session_id}", response_model=dict)
-async def get_session(session_id: str, request: Request, limit: int = 10) -> dict:
+async def get_session(session_id: str, request: Request, limit: int = 10,
+                      user: Principal = Depends(current_user)) -> dict:
     rt = _rt(request)
+    await _own_session(rt, session_id, user.user_id)
     session = await rt.deps.pg.get_session(session_id)
     rows = await rt.deps.pg.recent_turns(session_id, limit=limit)
     return {
@@ -122,8 +136,10 @@ async def get_session(session_id: str, request: Request, limit: int = 10) -> dic
 async def chat_stream(session_id: str, body: ChatIn, request: Request,
                       trace: bool = Query(default=False,
                                           description="是否发送节点执行轨迹（node 事件）。"
-                                                      "演示与排障用；生产环境保持 false")) -> StreamingResponse:
+                                                      "演示与排障用；生产环境保持 false"),
+                      user: Principal = Depends(current_user)) -> StreamingResponse:
     rt = _rt(request)
+    await _own_session(rt, session_id, user.user_id)
     await _guard(rt, session_id)
     if not await rt.try_begin(session_id):
         raise HTTPException(status_code=409, detail={"code": "busy",
@@ -135,8 +151,10 @@ async def chat_stream(session_id: str, body: ChatIn, request: Request,
 
 @router.post("/chat/{session_id}/confirm")
 async def chat_confirm(session_id: str, body: ConfirmIn, request: Request,
-                       trace: bool = Query(default=False)) -> StreamingResponse:
+                       trace: bool = Query(default=False),
+                       user: Principal = Depends(current_user)) -> StreamingResponse:
     rt = _rt(request)
+    await _own_session(rt, session_id, user.user_id)
     await _guard(rt, session_id)
     if not await rt.try_begin(session_id):
         raise HTTPException(status_code=409, detail={"code": "busy",
@@ -154,6 +172,21 @@ async def _guard(rt: Runtime, session_id: str) -> None:
             "code": "human_takeover",
             "message": "当前会话已由人工客服接管，请由坐席处理",
         })
+
+
+async def _own_session(rt: Runtime, session_id: str, user_id: str) -> None:
+    """确认会话属于当前用户。**不归你就当作不存在。**
+
+    ★ 这里用 404 而不是 403 是刻意的：403 等于告诉对方"这个会话存在，
+      但不归你" —— 那就成了一个探测别人会话 id 的接口。404 什么都不泄漏。
+    ★ 归属为空的会话（历史遗留、或未绑定用户的匿名会话）同样按 404 处理，
+      而不是"谁先来就归谁" —— 后者等于给了一条抢注别人会话的路径。
+    """
+    session = await rt.deps.pg.get_session(session_id)
+    owner = session.get("user_id")
+    if not owner or str(owner) != str(user_id):
+        raise HTTPException(status_code=404, detail={
+            "code": "session_not_found", "message": "会话不存在"})
 
 
 def _sse_response(source: AsyncIterator[str]) -> StreamingResponse:

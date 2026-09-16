@@ -22,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ..ops.routes import router as ops_router
 from ..runtime import create_runtime
 from ..settings import Settings
+from .auth_routes import router as auth_router
 from .routes import router
 
 #: 单文件页面目录（C 端聊天页与运营面板一样，无构建步骤、由 FastAPI 直接托管）
@@ -44,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="LangGraph 多 Agent 顾问系统 · 过程流式 + 已审正文整段发送",
         lifespan=lifespan,
     )
+    app.include_router(auth_router)     # C 端注册 / 登录 / me
     app.include_router(router)
     app.include_router(ops_router)      # 坐席工作台（/ops/panel 是单文件监控面板）
 

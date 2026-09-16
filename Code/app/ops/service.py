@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..runtime import Runtime
-from .deps import Agent
+from .deps import Agent, mask_for
 
 #: 工单状态机（见 Workflow/ops-console.md）
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
@@ -77,12 +77,32 @@ async def get_detail(rt: Runtime, agent: Agent, ticket_id: str) -> dict:
     events = await rt.deps.pg.list_handoff_events(ticket_id)
     report = ticket.get("risk_report") or {}
 
+    # ★ 发起人：坐席必须知道"这是谁的事"，否则接起来还得先问一遍。
+    #   邮箱按角色脱敏 —— 与手机号同一条规则（service 看不到完整联系方式，
+    #   doctor / compliance / admin 可以）。显示名与 user_id 不脱敏：
+    #   前者是用户自己起的名字，后者是内部标识，都不属于敏感个人信息。
+    user = await rt.deps.pg.get_user(ticket.get("user_id"))
+    if user:
+        user_out = {
+            "user_id": user.get("user_id"),
+            "display_name": user.get("display_name"),
+            "email": mask_for(agent, user.get("email") or "") or None,
+            "email_verified": user.get("email_verified"),
+            "registered_at": user.get("created_at"),
+        }
+    else:
+        # 用户在转人工之后被删除了 —— 如实说明，不要显示成空白让人以为是 bug
+        user_out = {"user_id": ticket.get("user_id"), "display_name": None,
+                    "email": None, "email_verified": None, "registered_at": None,
+                    "_note": "该用户记录已不存在" if ticket.get("user_id") else "工单未绑定用户"}
+
     # 会话详情要包含"AI 未发出的草稿与审查意见" —— 坐席需要知道 AI 想说什么、
     # 为什么被拦下来，这决定了他怎么接话
     return {
         "ticket": {
             "ticket_id": ticket.get("ticket_id"),
             "session_id": ticket.get("session_id"),
+            "user_id": ticket.get("user_id"),
             "reason": ticket.get("reason"),
             "priority": ticket.get("priority"),
             "status": ticket.get("status"),
@@ -95,6 +115,7 @@ async def get_detail(rt: Runtime, agent: Agent, ticket_id: str) -> dict:
             # ★ 这条是硬约束：没接单就不能告诉用户"人工已接入"
             "human_joined": bool(ticket.get("accepted_at")),
         },
+        "user": user_out,
         "last_turns": ticket.get("last_turns") or messages[-10:],
         "messages": [{"role": m.get("role"), "content": _mask(agent, m.get("content", "")),
                       "review_kind": m.get("review_kind"), "risk_level": m.get("risk_level"),

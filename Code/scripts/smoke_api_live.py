@@ -4,7 +4,10 @@
     # 终端 A
     python -m app.api --host 127.0.0.1 --port 8090
     # 终端 B
-    python scripts/smoke_api_live.py --base http://127.0.0.1:8090 --user <user_id>
+    python scripts/smoke_api_live.py --base http://127.0.0.1:8090
+
+    （身份来自登录：脚本会自动用 seed_kb.py 创建的演示账号登录顾客端与坐席端，
+      不再需要 --user 参数 —— 用户身份由登录决定，不由命令行声明。）
 
 ═══ 为什么还需要这个脚本（smoke_api.py 不是已经验过了吗）═══
 
@@ -51,7 +54,34 @@ from app.graph.progress import STAGE_TEXT  # noqa: E402
 PASS: list[str] = []
 FAIL: list[str] = []
 
-OPS_HEADERS = {"X-Agent-Id": "agent-001", "X-Agent-Role": "service"}
+#: 坐席请求头：现在是**登录后拿到的令牌**，不再是自报角色。
+#: 登录成功后由 setup_auth 填充；此前为空 dict —— 空令牌会拿到 401，
+#: 那正是我们想要的失败方式（而不是悄悄用一个默认坐席跑通）。
+OPS_HEADERS: dict[str, str] = {}
+
+DEMO_EMAIL = "demo@zhimei.test"
+DEMO_PASSWORD = "zhimei-demo-2026"
+SERVICE_EMAIL = "service@zhimei.test"
+
+
+async def setup_auth(client: httpx.AsyncClient) -> tuple[bool, str]:
+    """登录顾客与坐席，把令牌装到默认头与 OPS_HEADERS 上。
+
+    ★ 这里取代了原来的 `--user` 参数：**用户身份由登录决定**，
+      不再是命令行里传进来的一个 id。传 id 的老做法意味着谁都能声称
+      自己是任何用户 —— 那正是这次要把洞堵上的东西。
+    """
+    r = await client.post("/api/auth/login", json={"email": DEMO_EMAIL, "password": DEMO_PASSWORD})
+    if r.status_code != 200:
+        return False, f"顾客登录失败 HTTP {r.status_code}：{r.text[:120]}"
+    client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+
+    r = await client.post("/ops/auth/login",
+                          json={"email": SERVICE_EMAIL, "password": DEMO_PASSWORD})
+    if r.status_code != 200:
+        return False, f"坐席登录失败 HTTP {r.status_code}：{r.text[:120]}"
+    OPS_HEADERS["Authorization"] = f"Bearer {r.json()['access_token']}"
+    return True, ""
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -156,8 +186,6 @@ def report_errors(events: list[tuple[str, dict]]) -> list[dict]:
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8090")
-    ap.add_argument("--user", default=None,
-                    help="绑定用户 id（见 seed_kb.py 输出）。不绑定则跳过操作类场景")
     args = ap.parse_args()
 
     async with httpx.AsyncClient(base_url=args.base, timeout=120) as client:
@@ -167,6 +195,17 @@ async def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"连不上 {args.base}：{exc}")
             print("先起服务：python -m app.api --host 127.0.0.1 --port 8090")
+            return 2
+
+        # ── 0.5 登录（顾客 + 坐席）──
+        # ★ 必须在最前面：接口现在全部要求认证，不登录的话后面每一条都是 401，
+        #   而 401 会伪装成各种各样的失败（会话建不出来、SSE 空流……），
+        #   排查时容易往错的方向找。
+        section("0. 认证：顾客与坐席登录")
+        ok, why = await setup_auth(client)
+        check("顾客与坐席都能登录（演示账号见 seed_kb.py 输出）", ok, why)
+        if not ok:
+            print("\n提示：先跑 python scripts/seed_kb.py 创建演示账号，再重试。")
             return 2
 
         # ══════════════ 1 健康检查与会话 ══════════════
@@ -184,7 +223,7 @@ async def main() -> int:
         if health.get("profile") != "real":
             print("    （当前是 fake 档位：跳过依赖真实库与真实模型的断言）")
 
-        r = await client.post("/api/sessions", json={"channel": "live", "user_id": args.user})
+        r = await client.post("/api/sessions", json={"channel": "web"})
         check("POST /api/sessions 建会话", r.status_code == 200, f"HTTP {r.status_code}")
         sid = (r.json() or {}).get("session_id")
         check("返回了 session_id", bool(sid))
@@ -226,13 +265,12 @@ async def main() -> int:
 
         # ══════════════ 3 挂起 → 确认（跨两个 HTTP 请求）══════════════
         section("3. 挂起 → 确认：跨两个独立 HTTP 请求")
-        if not args.user:
-            print("  （未提供 --user，跳过操作类场景 —— 不绑用户时会话 auth.verified=false，"
-                  "操作类请求按设计会被判 need_info）")
-        else:
+        # 身份来自登录令牌，不再需要 --user 开关：会话建出来就绑在当前用户身上，
+        # auth.verified=true，操作类请求才走得下去。
+        if True:
             # 3.1 错误哈希不得执行
             s_t = (await client.post("/api/sessions",
-                                     json={"channel": "live", "user_id": args.user})).json()["session_id"]
+                                     json={"channel": "web"})).json()["session_id"]
             _, _, ev1 = await sse(client, "POST", f"/api/chat/{s_t}/stream",
                                   {"text": "帮我把热玛吉的预约改到浦东店周五下午"})
             report_errors(ev1)
@@ -259,7 +297,7 @@ async def main() -> int:
 
             # 3.2 正确哈希 → 真的执行
             s_ok = (await client.post("/api/sessions",
-                                      json={"channel": "live", "user_id": args.user})).json()["session_id"]
+                                      json={"channel": "web"})).json()["session_id"]
             _, _, ev2 = await sse(client, "POST", f"/api/chat/{s_ok}/stream",
                                   {"text": "帮我把热玛吉的预约改到浦东店周五下午"})
             report_errors(ev2)

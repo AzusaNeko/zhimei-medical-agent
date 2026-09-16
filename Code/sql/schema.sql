@@ -22,8 +22,24 @@ CREATE TABLE IF NOT EXISTS app.app_user (
   gender        SMALLINT,
   birth_year    SMALLINT,
   status        TEXT NOT NULL DEFAULT 'active',
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- ── 登录（邮箱 + 密码）──
+  -- email 用 CITEXT 风格的小写归一化在应用层做（lower()），这里只保证唯一。
+  -- ★ 唯一约束必须是 UNIQUE 而不是靠应用层判重：并发注册同名邮箱时，
+  --   应用层的"先查再插"会漏（两个请求同时查到不存在），只有数据库约束能兜住。
+  email         TEXT UNIQUE,
+  -- ★ 只存哈希，永不存明文。格式 `scrypt$n$r$p$salt$hash`，
+  --   参数写在串里，将来调强度时老密码仍可校验。
+  password_hash TEXT,
+  -- 邮箱验证：占位实现（没有邮件服务），但字段与流程先按真的来，
+  -- 接上邮件服务时不用改表。
+  email_verified BOOLEAN NOT NULL DEFAULT false,
+  verify_token   TEXT,
+  verify_expires TIMESTAMPTZ,
+  last_login_at  TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_app_user_email ON app.app_user (lower(email));
 
 CREATE TABLE IF NOT EXISTS app.user_identity (
   identity_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -327,7 +343,15 @@ CREATE TABLE IF NOT EXISTS ops.agent_user (
   name     TEXT NOT NULL,
   role     TEXT NOT NULL DEFAULT 'service',   -- service | doctor | compliance | admin
   on_duty  BOOLEAN NOT NULL DEFAULT false,
-  status   TEXT NOT NULL DEFAULT 'active'
+  status   TEXT NOT NULL DEFAULT 'active',
+
+  -- ── 坐席登录 ──
+  -- ★ 这两列是补上的一个真实安全洞：在此之前，坐席角色是**客户端在请求头里
+  --   自己声明的**（X-Agent-Role: compliance），任何人都能拿到未脱敏的手机号。
+  --   现在角色从 JWT 里读，客户端说什么不算数。
+  email         TEXT UNIQUE,
+  password_hash TEXT,
+  last_login_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS ops.misreport_feedback (

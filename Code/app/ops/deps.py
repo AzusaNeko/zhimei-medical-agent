@@ -1,14 +1,23 @@
 """
-运营后台：坐席身份与权限（MVP 版）。
+运营后台：坐席身份与权限。
 
-**这不是生产级的鉴权**，而是一个可替换的接缝：
-  · MVP：从请求头读 X-Agent-Id / X-Agent-Role；缺省时给一个演示坐席，
-    让监控面板开箱可用（否则演示时要先造一个登录系统）
-  · 生产：换成你们的 SSO / 客服系统登录态，**只改 current_agent 这一个函数**
+═══ 这里补上的是一个真实的安全洞 ═══
 
-两条硬规则写在这里而不是文档里：
-  1. service 角色拿到的手机号 / 身份证必须**服务端脱敏**，不能靠前端隐藏
-  2. 放行权限与回复权限分离：被 block 的内容任何人都不能直接发给用户
+在此之前，坐席身份是**客户端在请求头里自己声明的**：
+
+    X-Agent-Role: compliance      ← 请求方自己说自己是合规岗
+    X-Agent-Id:   whatever
+
+后果很直接：任何能访问该接口的人，改一个请求头就能拿到**未脱敏的手机号**
+（`RAW_FIELD_ROLES` 里 compliance / doctor 可以看到原文）。
+对一个卖点是"合规"的系统来说，这是最不该有的洞 —— 脱敏做得再仔细，
+只要角色能自己声明，就等于没做。
+
+现在改成：**身份来自 JWT（签名过的），角色再回数据库核对当前值**。
+请求头完全不再参与身份判定。详见 `app/api/security.py` 里
+「token 说你是谁、数据库说你能干什么」那段。
+
+接缝仍然保留：将来要接机构的 SSO / 客服系统登录态，**只改 current_agent 一处**。
 """
 
 from __future__ import annotations
@@ -16,7 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
 
 from ..services import text as T
 
@@ -36,8 +46,6 @@ PERMISSIONS: dict[str, set[str]] = {
 #: 角色能看到哪些敏感字段（未列出 = 脱敏后返回）
 RAW_FIELD_ROLES = {"doctor", "compliance", "admin"}
 
-DEMO_AGENT = {"agent_id": "demo-agent-0001", "name": "demo-agent-0001", "role": "service"}
-
 
 @dataclass(frozen=True)
 class Agent:
@@ -54,28 +62,21 @@ class Agent:
         return self.role in RAW_FIELD_ROLES
 
 
-async def current_agent(
-    x_agent_id: str | None = Header(default=None),
-    x_agent_role: str | None = Header(default=None),
-) -> Agent:
-    """
-    解析坐席身份。
+class AgentLoginIn(BaseModel):
+    email: str = Field(min_length=5, max_length=190)
+    password: str = Field(min_length=1, max_length=128)
 
-    ⚠️ 只从请求头读 **ASCII 的 agent_id 与 role**，不读显示名 ——
-       HTTP 头按规范只能是 latin-1，中文名字塞进去 httpx/浏览器都会直接报错。
-       显示名应当由 agent_id 去 ops.agent_user 查（生产做法），
-       或由前端本地维护（MVP 做法）。
 
-    MVP 允许缺省（返回演示坐席）是为了让监控面板开箱可用；
-    生产环境请把 default 改成 None 并在这里抛 401。
+async def current_agent(request: Request) -> Agent:
+    """坐席身份依赖：令牌定身份 → 数据库读当前角色。
+
+    实现放在 `app.api.security`（C 端与坐席的验签逻辑是同一套）。
+    这里保留一个薄转发，让路由层继续写 `Depends(current_agent)`，
+    将来换 SSO 时只改这一个函数。
     """
-    role = (x_agent_role or DEMO_AGENT["role"]).strip()
-    if role not in PERMISSIONS:
-        raise HTTPException(status_code=403, detail={"code": "unknown_role",
-                                                     "message": f"未知角色：{role}"})
-    agent_id = (x_agent_id or DEMO_AGENT["agent_id"]).strip()
-    # TODO(生产): name = await ops_lookup(agent_id) —— 从 ops.agent_user 取显示名
-    return Agent(agent_id=agent_id, name=agent_id, role=role)
+    from ..api.security import current_staff_agent
+
+    return await current_staff_agent(request)
 
 
 def require(agent: Agent, permission: str) -> None:

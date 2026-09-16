@@ -121,7 +121,8 @@ class PgStore:
         return [dict(r) for r in reversed(rows)]
 
     async def list_sessions(self, *, limit: int = 30,
-                            channel: str | None = None) -> list[dict]:
+                            channel: str | None = None,
+                            user_id: str | None = None) -> list[dict]:
         """会话列表（给"新对话 / 切换对话"用）。
 
         标题取**第一条用户消息**，而不是让用户自己命名 —— 对话类产品里
@@ -130,8 +131,8 @@ class PgStore:
 
         ★ limit 是必须的：会话表只增不减，不设上限的话这个接口迟早会
           一次返回几万条。真正的分页要配合游标，MVP 先按"最近活跃的前 N 条"来。
-        ★ 生产环境这里必须再按登录用户过滤（`WHERE user_id = $x`）——
-          现在没有鉴权层，列出的是全部会话，仅适用于演示。
+        ★ user_id 过滤同样是必须的：少了它，任何一个登录用户都能看到
+          **所有人**的对话列表。这不是"隐私增强"，是底线。
         """
         rows = await self._fetch(
             """SELECT s.session_id, s.channel, s.status, s.ai_enabled,
@@ -143,10 +144,11 @@ class PgStore:
                         WHERE m.session_id = s.session_id)          AS msg_count
                  FROM app.chat_session s
                 WHERE ($1::text IS NULL OR s.channel = $1)
+                  AND ($3::uuid IS NULL OR s.user_id = $3)
                 ORDER BY s.last_active_at DESC NULLS LAST,
                          s.started_at DESC
                 LIMIT $2""",
-            channel, int(limit))
+            channel, int(limit), _uuid(user_id))
         out = []
         for r in rows:
             d = _row(r)
@@ -409,6 +411,96 @@ class PgStore:
                FROM ops.handoff_ticket WHERE ticket_id = $1""",
             _uuid(ticket_id))
         return _row(row) if row else None
+
+    # ══════════════ 认证：C 端用户 ══════════════
+    async def create_user(self, *, email: str, password_hash: str,
+                          display_name: str = "", verify_token: str | None = None,
+                          verify_expires: Any = None) -> dict:
+        """注册。邮箱冲突时抛 ValueError（由路由层转成 409）。
+
+        ★ 靠数据库的 UNIQUE 约束兜底，而不是"先查再插"：
+          并发注册同一个邮箱时，两个请求都会查到"不存在"，然后都去插入。
+          只有唯一约束能在数据库层面真正防住。
+        """
+        try:
+            row = await self._fetchrow(
+                """INSERT INTO app.app_user
+                   (email, password_hash, display_name, verify_token, verify_expires)
+                   VALUES (lower($1), $2, $3, $4, $5)
+                   RETURNING user_id, email, display_name, email_verified, created_at""",
+                email, password_hash, display_name or email.split("@")[0],
+                verify_token, _ts(verify_expires))
+        except Exception as exc:  # noqa: BLE001
+            if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+                raise ValueError("该邮箱已注册") from exc
+            raise
+        return _row(row)
+
+    async def find_user_by_email(self, email: str) -> dict | None:
+        """按邮箱查用户（**含 password_hash**，仅供登录校验用）。
+
+        注意大小写：邮箱按 lower() 归一化比较 —— 但不要用 `lower(email) = $1`
+        包住列，那会让索引失效（全表扫描）。用 `email = lower($1)` 配合
+        建在 lower(email) 上的函数索引。
+        """
+        row = await self._fetchrow(
+            """SELECT user_id, email, display_name, password_hash, email_verified, status
+                 FROM app.app_user WHERE email = lower($1) LIMIT 1""", email)
+        return _row(row) if row else None
+
+    async def get_user(self, user_id: str | None) -> dict | None:
+        """按 id 查用户（**不含 password_hash**）。工单详情用它显示发起人。"""
+        if not user_id:
+            return None
+        row = await self._fetchrow(
+            """SELECT user_id, email, display_name, email_verified, status, created_at
+                 FROM app.app_user WHERE user_id = $1""", _uuid(user_id))
+        return _row(row) if row else None
+
+    async def verify_user_email(self, token: str) -> dict | None:
+        """用验证令牌激活邮箱。令牌一次性 + 有有效期。"""
+        row = await self._fetchrow(
+            """UPDATE app.app_user
+                  SET email_verified = true, verify_token = NULL, verify_expires = NULL
+                WHERE verify_token = $1 AND verify_expires > now()
+            RETURNING user_id, email, display_name, email_verified""", token)
+        return _row(row) if row else None
+
+    async def touch_user_login(self, user_id: str) -> None:
+        await self._execute("UPDATE app.app_user SET last_login_at = now() WHERE user_id = $1",
+                            _uuid(user_id))
+
+    # ══════════════ 认证：坐席 ══════════════
+    async def find_agent_by_email(self, email: str) -> dict | None:
+        row = await self._fetchrow(
+            """SELECT agent_id, name, role, password_hash, status
+                 FROM ops.agent_user WHERE email = lower($1) LIMIT 1""", email)
+        return _row(row) if row else None
+
+    async def get_agent(self, agent_id: str) -> dict | None:
+        row = await self._fetchrow(
+            """SELECT agent_id, name, role, status FROM ops.agent_user
+                WHERE agent_id = $1""", agent_id)
+        return _row(row) if row else None
+
+    async def upsert_agent(self, *, agent_id: str, name: str, role: str,
+                           email: str | None = None,
+                           password_hash: str | None = None) -> dict:
+        row = await self._fetchrow(
+            """INSERT INTO ops.agent_user (agent_id, name, role, email, password_hash)
+               VALUES ($1,$2,$3, lower($4), $5)
+               ON CONFLICT (agent_id) DO UPDATE
+               SET name = EXCLUDED.name, role = EXCLUDED.role,
+                   email = COALESCE(EXCLUDED.email, ops.agent_user.email),
+                   password_hash = COALESCE(EXCLUDED.password_hash,
+                                            ops.agent_user.password_hash)
+               RETURNING agent_id, name, role, email""",
+            agent_id, name, role, email, password_hash)
+        return _row(row)
+
+    async def touch_agent_login(self, agent_id: str) -> None:
+        await self._execute(
+            "UPDATE ops.agent_user SET last_login_at = now() WHERE agent_id = $1", agent_id)
 
     async def update_ticket(self, ticket_id: str, **fields: Any) -> dict | None:
         cols = {k: v for k, v in fields.items() if k in self._TICKET_FIELDS}

@@ -46,6 +46,14 @@ def _f(key: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _b(key: str, default: bool) -> bool:
+    """布尔开关。只认几种明确的写法，避免 "false" 被当成真值这种经典坑。"""
+    raw = _s(key).lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     # ── 档位 ──
@@ -77,6 +85,21 @@ class Settings:
 
     # ── 凭据 ──
     release_secret: str = field(default_factory=lambda: _s("RELEASE_SECRET", "dev-only-change-me"))
+    #: JWT 签名密钥。★ 必须 ≥32 字节：HS256 用 SHA-256，密钥短于摘要长度会削弱
+    #: 安全性（PyJWT 自己也会为此发 InsecureKeyLengthWarning）。
+    jwt_secret: str = field(default_factory=lambda: _s("JWT_SECRET", "dev-only-change-me-jwt-secret-32b"))
+    #: 令牌有效期（小时）。短期令牌 + 重新登录，比长期令牌安全得多。
+    jwt_ttl_hours: int = field(default_factory=lambda: _i("JWT_TTL_HOURS", 12))
+    #: 邮箱验证链接的有效期（小时）。占位实现里也能用。
+    email_verify_ttl_hours: int = field(default_factory=lambda: _i("EMAIL_VERIFY_TTL_HOURS", 24))
+    #: ★ 是否在注册响应里**直接返回**邮箱验证令牌。
+    #:
+    #:   这是个**演示期的临时妥协**：本项目没有邮件服务，不返回令牌的话
+    #:   注册完就没法完成验证，流程走不下去。
+    #:   它的风险是明确的：任何能调用注册接口的人都能拿到令牌并激活自己 ——
+    #:   而这本来就是注册者本人，所以风险有限；但它**不能带到生产**。
+    #:   接上真实邮件服务后必须置 false（验证令牌只应出现在邮件里）。
+    expose_verify_token: bool = field(default_factory=lambda: _b("EXPOSE_VERIFY_TOKEN", True))
 
     # ── 预算与时效 ──
     max_revision: int = field(default_factory=lambda: _i("MAX_REVISION", 2))

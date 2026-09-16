@@ -85,6 +85,28 @@ async def main() -> int:
         async with httpx.AsyncClient(transport=transport, base_url="http://test",
                                      timeout=30) as client:
 
+            # ══════════════ 0 先登录（接口现在要求认证）══════════════
+            section("0. 认证前置：走一遍注册 → 验证 → 登录")
+            # ★ 这里**刻意走完整的真实流程**，而不是直接往 fake 存储里塞一个用户：
+            #   直接塞的话，注册/验证/登录这三条链路在本套件里就完全没有覆盖，
+            #   而它们恰恰是最该被回归盯住的部分。
+            email = f"smoke-api-{uuid.uuid4().hex[:8]}@zhimei.test"
+            pw = "smoke-api-password"
+            r = await client.post("/api/auth/register",
+                                  json={"email": email, "password": pw, "display_name": "接口冒烟"})
+            check("注册 → 200 且返回验证令牌",
+                  r.status_code == 200 and r.json().get("verify_token"),
+                  f"{r.status_code} {r.text[:120]}")
+            r = await client.post("/api/auth/verify-email",
+                                  json={"token": r.json()["verify_token"]})
+            check("邮箱验证 → 200", r.status_code == 200, f"{r.status_code}")
+            r = await client.post("/api/auth/login", json={"email": email, "password": pw})
+            check("登录 → 200 且拿到令牌", r.status_code == 200 and r.json().get("access_token"),
+                  f"{r.status_code} {r.text[:120]}")
+            # ★ 把令牌设成客户端的默认头，后面所有请求自动带上 ——
+            #   比逐条改调用点可靠得多（漏掉一处就是一堆莫名其妙的 401）。
+            client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+
             # ══════════════ 1 健康检查与会话 ══════════════
             section("1. 健康检查与会话")
             r = await client.get("/api/health")

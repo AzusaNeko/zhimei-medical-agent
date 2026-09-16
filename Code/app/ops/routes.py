@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from ..graph.progress import STAGE_TEXT  # noqa: F401  (保持与聊天侧同一个文案源)
 from ..runtime import Runtime
 from . import service
-from .deps import Agent, current_agent, require
+from .deps import PERMISSIONS, Agent, AgentLoginIn, current_agent, require
 
 router = APIRouter(prefix="/ops")
 
@@ -52,6 +52,50 @@ def _rt(request: Request) -> Runtime:
 def _fail(exc: service.OpsError) -> HTTPException:
     return HTTPException(status_code=exc.status,
                          detail={"code": exc.code, "message": exc.message})
+
+
+# ════════════════════════════════════════════════════════════════
+#  坐席登录
+# ════════════════════════════════════════════════════════════════
+@router.post("/auth/login")
+async def agent_login(body: AgentLoginIn, request: Request) -> dict:
+    """坐席登录。角色由**数据库**决定，不接受客户端声明。
+
+    ★ 与 C 端登录一样：用户不存在与密码错误返回同一个错误，且用户不存在时
+      也跑一次哈希校验 —— 否则响应时间差能被用来枚举坐席账号。
+      坐席账号的枚举危害更大：知道谁是合规岗，就知道该针对谁下手。
+    """
+    from ..services import auth as A
+
+    rt = _rt(request)
+    email = (body.email or "").strip().lower()
+    row = await rt.deps.pg.find_agent_by_email(email)
+    ok = A.verify_password(body.password, (row or {}).get("password_hash"))
+    if not row or not ok:
+        raise HTTPException(status_code=401, detail={
+            "code": "bad_credentials", "message": "邮箱或密码不正确"})
+    if row.get("status") != "active":
+        raise HTTPException(status_code=403, detail={
+            "code": "agent_disabled", "message": "坐席账号已被停用"})
+    role = str(row.get("role") or "")
+    if role not in PERMISSIONS:
+        raise HTTPException(status_code=403, detail={
+            "code": "unknown_role", "message": f"未知角色：{role}"})
+
+    await rt.deps.pg.touch_agent_login(str(row["agent_id"]))
+    token, ttl = A.issue_token(rt.settings, A.Principal(
+        user_id=str(row["agent_id"]), role=role, name=str(row.get("name") or "")))
+    return {"access_token": token, "token_type": "Bearer", "expires_in": ttl,
+            "agent": {"agent_id": row["agent_id"], "name": row.get("name"), "role": role},
+            # 前端据此决定显示哪些按钮；真正的权限判定仍在服务端
+            "permissions": sorted(PERMISSIONS.get(role, set()))}
+
+
+@router.get("/auth/me")
+async def agent_me(agent: Agent = Depends(current_agent)) -> dict:
+    return {"agent": {"agent_id": agent.agent_id, "name": agent.name, "role": agent.role},
+            "permissions": sorted(PERMISSIONS.get(agent.role, set())),
+            "sees_raw_pii": agent.sees_raw_pii}
 
 
 # ════════════════════════════════════════════════════════════════

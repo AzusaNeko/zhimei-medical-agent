@@ -155,6 +155,32 @@ button:disabled{opacity:.45;cursor:not-allowed}
             font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 16px}
 .trace-foot b{color:var(--ink);font-weight:600}
 .hint{font-size:12px;color:var(--muted);padding:8px 18px 0;line-height:1.6}
+
+/* ── 登录 / 注册浮层 ── */
+.auth{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+      background:rgba(23,47,64,.45);backdrop-filter:blur(3px)}
+.auth[hidden]{display:none}
+.auth-card{width:min(420px,92vw);background:#fff;border-radius:14px;padding:26px 28px 22px;
+           box-shadow:0 18px 60px rgba(12,30,42,.28)}
+.auth-card h1{margin:0 0 4px;font-size:19px}
+.auth-card .sub{margin:0 0 18px;font-size:12.5px;color:var(--muted);line-height:1.6}
+.tabs{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+.tabs button{border:none;background:none;padding:8px 14px;font-size:13.5px;color:var(--muted);
+             border-bottom:2px solid transparent;border-radius:0}
+.tabs button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field label{font-size:12.5px;color:var(--muted)}
+.field input{padding:9px 11px;border:1px solid var(--line);border-radius:8px;font:inherit}
+.field input:focus{outline:none;border-color:#8fbfb3;box-shadow:0 0 0 3px #e8f2f0}
+.auth-card .submit{width:100%;padding:11px;margin-top:4px;font-size:14.5px}
+.auth-msg{min-height:20px;font-size:12.5px;margin-top:10px;line-height:1.6}
+.auth-msg.err{color:var(--bad)}
+.auth-msg.ok{color:var(--ok)}
+.auth-tip{margin-top:14px;padding:9px 11px;background:#f7faf9;border:1px solid #e3ecea;
+          border-radius:8px;font-size:12px;color:var(--muted);line-height:1.7}
+.auth-tip code{color:var(--accent)}
+.topbar .who{display:flex;align-items:center;gap:8px}
+.topbar .who button{font-size:12.5px;padding:4px 10px;border-radius:999px}
 </style>
 </head>
 <body>
@@ -170,8 +196,48 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <label style="display:flex;align-items:center;gap:6px">
       <input type="checkbox" id="traceOn" checked> 显示执行轨迹
     </label>
+    <span class="who" id="whoBox" hidden>
+      <span class="pill" id="whoName">—</span>
+      <button id="logout">退出</button>
+    </span>
   </div>
 </header>
+
+<!-- ══════ 登录 / 注册 ══════ -->
+<div class="auth" id="authLayer" hidden>
+  <div class="auth-card">
+    <h1>智美医美顾问</h1>
+    <p class="sub">登录后即可开始咨询。您的对话只有自己能看见。</p>
+    <div class="tabs">
+      <button id="tabLogin" class="on">登录</button>
+      <button id="tabReg">注册</button>
+    </div>
+
+    <form id="formLogin">
+      <div class="field"><label>邮箱</label>
+        <input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com"></div>
+      <div class="field"><label>密码</label>
+        <input id="loginPwd" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+      <button class="primary submit" type="submit">登录</button>
+    </form>
+
+    <form id="formReg" hidden>
+      <div class="field"><label>邮箱</label>
+        <input id="regEmail" type="email" autocomplete="username" placeholder="you@example.com"></div>
+      <div class="field"><label>昵称（可空）</label>
+        <input id="regName" maxlength="40" placeholder="怎么称呼您"></div>
+      <div class="field"><label>密码（至少 10 位）</label>
+        <input id="regPwd" type="password" autocomplete="new-password" placeholder="••••••••"></div>
+      <button class="primary submit" type="submit">注册</button>
+    </form>
+
+    <div class="auth-msg" id="authMsg"></div>
+    <div class="auth-tip">
+      演示账号：<code>demo@zhimei.test</code> / <code>zhimei-demo-2026</code><br>
+      本项目没有邮件服务，注册后验证令牌会**直接返回**，页面上会显示验证按钮。
+    </div>
+  </div>
+</div>
 
 <div class="wrap">
   <!-- ══════ 左：会话列表 ══════ -->
@@ -311,7 +377,172 @@ let busy = false;
 let pendingPlan = null;     // 挂起中的方案
 let nodeSeq = 0;
 let conversations = [];
+let currentUser = null;
 const LS_KEY = "zhimei.currentSession";   // 刷新后回到同一个会话
+const LS_TOKEN = "zhimei.token";
+
+/* ══════════════════════════════════════════════════════════════
+   认证：令牌存取 + 带令牌的请求封装
+   ══════════════════════════════════════════════════════════════ */
+function getToken() { return localStorage.getItem(LS_TOKEN) || ""; }
+
+function setToken(t) {
+  if (t) localStorage.setItem(LS_TOKEN, t);
+  else localStorage.removeItem(LS_TOKEN);
+}
+
+/** 统一加 Authorization 头；401 时**清掉令牌并弹回登录**。
+ *
+ *  ★ 401 集中在这里处理，而不是每个调用点各写一遍 ——
+ *    散着写必然会漏掉一两处，表现成"某个操作悄悄失败了"。
+ */
+async function api(url, opts = {}) {
+  const o = {...opts};
+  o.headers = {...(opts.headers || {})};
+  const t = getToken();
+  if (t) o.headers["Authorization"] = "Bearer " + t;
+  const r = await fetch(url, o);
+  if (r.status === 401) {
+    setToken("");
+    currentUser = null;
+    showAuth("登录已过期，请重新登录");
+    throw new Error("unauthorized");
+  }
+  return r;
+}
+
+function showAuth(msg) {
+  $("authLayer").hidden = false;
+  $("whoBox").hidden = true;
+  $("authMsg").className = "auth-msg" + (msg ? " err" : "");
+  $("authMsg").textContent = msg || "";
+}
+
+function hideAuth() {
+  $("authLayer").hidden = true;
+  $("authMsg").textContent = "";
+}
+
+async function doLogin(e) {
+  e.preventDefault();
+  const email = $("loginEmail").value.trim();
+  const pwd = $("loginPwd").value;
+  const msg = $("authMsg");
+  msg.className = "auth-msg";
+  msg.textContent = "登录中…";
+  try {
+    const r = await fetch("/api/auth/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password: pwd})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // 后端给了可区分的 code，这里翻译成人话
+      const map = {
+        bad_credentials: "邮箱或密码不正确",
+        email_not_verified: "邮箱还没验证 —— 请先完成邮箱验证",
+        user_disabled: "账号已被停用",
+      };
+      msg.className = "auth-msg err";
+      if (d.code === "email_not_verified") {
+        msg.textContent = map[d.code] + "。若是刚注册，请用注册时给出的验证令牌。";
+      } else {
+        msg.textContent = map[d.code] || d.message || "登录失败";
+      }
+      return;
+    }
+    setToken(d.access_token);
+    currentUser = d.user;
+    hideAuth();
+    await afterLogin();
+  } catch (err) {
+    msg.className = "auth-msg err";
+    msg.textContent = "网络错误：" + err.message;
+  }
+}
+
+async function doRegister(e) {
+  e.preventDefault();
+  const email = $("regEmail").value.trim();
+  const pwd = $("regPwd").value;
+  const msg = $("authMsg");
+  msg.className = "auth-msg";
+  msg.textContent = "注册中…";
+  try {
+    const r = await fetch("/api/auth/register", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password: pwd, display_name: $("regName").value.trim()})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      msg.className = "auth-msg err";
+      msg.textContent = d.message || "注册失败";
+      return;
+    }
+    if (d.verify_token) {
+      // 演示环境：验证令牌直接返回，这里立刻帮他验证，省掉手工粘贴
+      msg.className = "auth-msg ok";
+      msg.textContent = "注册成功，正在完成邮箱验证…";
+      const vr = await fetch("/api/auth/verify-email", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({token: d.verify_token})
+      });
+      if (vr.ok) {
+        msg.textContent = "邮箱已验证，正在登录…";
+        $("loginEmail").value = email;
+        $("loginPwd").value = pwd;
+        switchTab("login");
+        await doLogin(new Event("submit"));
+      } else {
+        msg.className = "auth-msg err";
+        msg.textContent = "邮箱验证失败，请稍后重试";
+      }
+    } else {
+      msg.className = "auth-msg ok";
+      msg.textContent = "注册成功，请到邮箱完成验证后再登录";
+    }
+  } catch (err) {
+    msg.className = "auth-msg err";
+    msg.textContent = "网络错误：" + err.message;
+  }
+}
+
+function switchTab(which) {
+  const isLogin = which === "login";
+  $("tabLogin").classList.toggle("on", isLogin);
+  $("tabReg").classList.toggle("on", !isLogin);
+  $("formLogin").hidden = !isLogin;
+  $("formReg").hidden = isLogin;
+  $("authMsg").textContent = "";
+}
+
+async function afterLogin() {
+  $("whoBox").hidden = false;
+  $("whoName").textContent = (currentUser && (currentUser.display_name || currentUser.email)) || "已登录";
+  await loadConversations();
+  const last = localStorage.getItem(LS_KEY);
+  $("messages").innerHTML = "";
+  if (last && conversations.some((c) => c.session_id === last)) {
+    await switchTo(last);
+  } else {
+    sid = null;
+    $("sidLabel").textContent = "新对话";
+    greeting();
+  }
+  $("input").focus();
+}
+
+function logout() {
+  setToken("");
+  localStorage.removeItem(LS_KEY);
+  currentUser = null;
+  sid = null;
+  conversations = [];
+  $("messages").innerHTML = "";
+  $("convList").innerHTML = "";
+  clearTrace(true);
+  showAuth("已退出登录");
+}
 
 /* ══════════════════════════════════════════════════════════════
    会话列表：新建 / 切换
@@ -331,7 +562,7 @@ function relTime(iso) {
 
 async function loadConversations() {
   try {
-    const r = await fetch("/api/sessions?channel=web&limit=40");
+    const r = await api("/api/sessions?channel=web&limit=40");
     conversations = (await r.json()).sessions || [];
   } catch (e) {
     conversations = [];
@@ -372,7 +603,7 @@ async function switchTo(target) {
   clearTrace(true);
   $("messages").innerHTML = "";
   try {
-    const r = await fetch("/api/sessions/" + target + "?limit=60");
+    const r = await api("/api/sessions/" + target + "?limit=60");
     const d = await r.json();
     sid = target;
     localStorage.setItem(LS_KEY, sid);
@@ -566,7 +797,7 @@ async function stream(path, body) {
   clearConfirm();
   let name = "?", ok = true;
   try {
-    const r = await fetch(url, {
+    const r = await api(url, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
@@ -574,7 +805,8 @@ async function stream(path, body) {
     if (!r.ok) {
       let detail = {};
       try { detail = (await r.json()); } catch (e) { /* 忽略 */ }
-      addMsg("err", "请求被拒绝（HTTP " + r.status + "）：" + (detail.message || ""));
+      addMsg("err", "请求被拒绝（HTTP " + r.status + "）：" +
+             (detail.message || ""));
       ok = false;
       return;
     }
@@ -685,7 +917,7 @@ async function send() {
   if (!sid) {
     // 会话是"懒创建"的：点「新对话」不建会话，发第一条消息时才建，
     // 免得库里堆一堆没说过话的空会话。
-    const r = await fetch("/api/sessions", {
+    const r = await api("/api/sessions", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({channel: "web"})
     });
@@ -712,6 +944,11 @@ EXAMPLES.forEach((t) => {
 });
 $("send").onclick = send;
 $("newChat").onclick = newChat;
+$("logout").onclick = logout;
+$("tabLogin").onclick = () => switchTab("login");
+$("tabReg").onclick = () => switchTab("reg");
+$("formLogin").addEventListener("submit", doLogin);
+$("formReg").addEventListener("submit", doRegister);
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
@@ -721,16 +958,23 @@ fetch("/api/health").then((r) => r.json()).then((h) => {
   setConn("on", "已连接");
 }).catch(() => setConn("", "离线"));
 
-// 刷新后回到上次那个会话（如果它还在列表里）
+// ★ 先验令牌、再决定进哪个界面。
+//   顺序不能反：没登录就去拉会话列表，只会拿到 401 再被弹回登录页 ——
+//   用户会看到界面闪一下才跳走。
 (async function boot() {
-  await loadConversations();
-  const last = localStorage.getItem(LS_KEY);
-  if (last && conversations.some((c) => c.session_id === last)) {
-    await switchTo(last);
-  } else {
-    greeting();
+  const t = getToken();
+  if (!t) { showAuth(); return; }
+  try {
+    const r = await fetch("/api/auth/me", {headers: {Authorization: "Bearer " + t}});
+    if (!r.ok) { setToken(""); showAuth("请先登录"); return; }
+    const d = await r.json();
+    currentUser = d.user;
+    hideAuth();
+    await afterLogin();
+  } catch (e) {
+    setConn("", "离线");
+    showAuth("无法连接服务，请稍后重试");
   }
-  $("input").focus();
 })();
 </script>
 </body>

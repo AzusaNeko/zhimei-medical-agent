@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -38,9 +39,47 @@ def section(title: str) -> None:
     print(f"\n{title}")
 
 
+#: 各角色的坐席令牌（登录后填充）。★ 角色现在是**服务端根据账号给的**，
+#: 不再是客户端在请求头里声明的 —— 这个字典就是那个变化的落点。
+_AGENT_TOKENS: dict[str, str] = {}
+_SMOKE_PW = "smoke-ops-password"
+
+
 def H(role: str = "service") -> dict:
-    """请求头只能放 ASCII —— 中文坐席名必须由服务端按 agent_id 查，不能塞进 header。"""
-    return {"X-Agent-Role": role, "X-Agent-Id": f"t-{role}"}
+    """按角色取坐席令牌。
+
+    ★ 这里原来返回的是 `{"X-Agent-Role": role, "X-Agent-Id": ...}` ——
+      也就是**测试脚本自己声明自己是合规岗**。现在不行了：
+      角色由登录令牌 + 数据库决定，所以这里改成一堆登录后拿到的令牌。
+      请求头里塞中文名的问题也随之消失（令牌是 ASCII 的）。
+    """
+    tok = _AGENT_TOKENS.get(role)
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+async def login_agents(client: httpx.AsyncClient, rt) -> None:
+    """给四个角色各造一个坐席账号并登录（fake 存储是内存的，得现造）。"""
+    from app.services import auth
+
+    for role in ("service", "doctor", "compliance", "admin"):
+        email = f"{role}@smoke.test"
+        await rt.deps.pg.upsert_agent(agent_id=f"t-{role}", name=f"测试{role}", role=role,
+                                      email=email,
+                                      password_hash=auth.hash_password(_SMOKE_PW))
+        r = await client.post("/ops/auth/login", json={"email": email, "password": _SMOKE_PW})
+        if r.status_code == 200:
+            _AGENT_TOKENS[role] = r.json()["access_token"]
+
+
+async def login_customer(client: httpx.AsyncClient) -> None:
+    """造一个顾客账号并登录，把令牌设成客户端默认头（后续 /api 调用自动带上）。"""
+    email = f"smoke-ops-{uuid.uuid4().hex[:8]}@zhimei.test"
+    reg = (await client.post("/api/auth/register",
+                             json={"email": email, "password": _SMOKE_PW,
+                                   "display_name": "工单顾客"})).json()
+    await client.post("/api/auth/verify-email", json={"token": reg["verify_token"]})
+    r = await client.post("/api/auth/login", json={"email": email, "password": _SMOKE_PW})
+    client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
 
 async def collect_sse(client: httpx.AsyncClient, url: str, headers: dict,
@@ -72,8 +111,12 @@ async def main() -> int:
         async with httpx.AsyncClient(transport=transport, base_url="http://test",
                                      timeout=30) as client:
 
-            # ══════════════ 准备：制造一张紧急工单 ══════════════
-            section("0. 准备：让 AI 转人工，产生一张工单")
+            # ══════════════ 准备：认证 + 制造一张紧急工单 ══════════════
+            section("0. 准备：登录（顾客 + 四个角色坐席），并让 AI 转人工")
+            await login_agents(client, rt)
+            await login_customer(client)
+            check("四个角色坐席都能登录",
+                  len(_AGENT_TOKENS) == 4, str(sorted(_AGENT_TOKENS)))
             sid = (await client.post("/api/sessions", json={})).json()["session_id"]
             async with client.stream("POST", f"/api/chat/{sid}/stream",
                                      json={"text": "我做完水光第三天，现在脸发白还特别疼，眼睛也有点看不清"}) as r:

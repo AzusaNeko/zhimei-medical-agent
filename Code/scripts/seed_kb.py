@@ -29,12 +29,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # ★ 先导入 settings（触发 .env 加载，把 HF_ENDPOINT 写进环境变量），再导入其它模块。
 #   顺序反了的话 huggingface_hub 已经按默认地址初始化完毕，镜像配置就白设了。
 from app.settings import Settings  # noqa: E402
+from app.services import auth  # noqa: E402
 
 from app.services.encoder import BgeM3Encoder  # noqa: E402
 from app.services.milvus_store import MilvusHybridStore  # noqa: E402
 from app.services.pg import PgStore  # noqa: E402
 
 CST = timezone(timedelta(hours=8))
+
+# ── 演示登录账号 ──
+DEMO_EMAIL = "demo@zhimei.test"
+DEMO_PASSWORD = "zhimei-demo-2026"
+#: 四个角色各一个，方便演示"同一张工单、不同角色看到的脱敏结果不同"
+AGENT_ACCOUNTS = [
+    ("service@zhimei.test", "客服小美", "service"),
+    ("doctor@zhimei.test", "张医生", "doctor"),
+    ("compliance@zhimei.test", "合规专员", "compliance"),
+    ("admin@zhimei.test", "系统管理员", "admin"),
+]
 
 # ── 演示知识库（每条都会被切成一个 chunk；真实项目应由审核流水线产出）──
 KB = [
@@ -149,11 +161,17 @@ async def _seed_business(pg: PgStore) -> None:
         #   固定下来还有额外好处：文档、脚本、肌肉记忆里的 user_id 不再漂移。
         DEMO_USER_ID = "22222222-2222-2222-2222-222222222222"
         user_id = await conn.fetchval(
-            """INSERT INTO app.app_user (user_id, display_name, gender, birth_year)
-               VALUES ($1, '演示用户', 2, 1993)
+            """INSERT INTO app.app_user
+                 (user_id, display_name, gender, birth_year,
+                  email, password_hash, email_verified)
+               VALUES ($1, '演示用户', 2, 1993, $2, $3, true)
                ON CONFLICT (user_id) DO UPDATE
-               SET display_name = EXCLUDED.display_name
-               RETURNING user_id""", DEMO_USER_ID)
+               SET display_name = EXCLUDED.display_name,
+                   email = EXCLUDED.email,
+                   password_hash = EXCLUDED.password_hash,
+                   email_verified = true
+               RETURNING user_id""",
+            DEMO_USER_ID, DEMO_EMAIL, auth.hash_password(DEMO_PASSWORD))
         await conn.execute(
             """INSERT INTO app.user_identity (user_id, channel, external_id, verified)
                VALUES ($1,'demo','demo-user-0001',true) ON CONFLICT DO NOTHING""", user_id)
@@ -186,6 +204,24 @@ async def _seed_business(pg: PgStore) -> None:
         print(f"  ★ 演示用户 user_id = {user_id}")
         print(f"    真实档位跑 CLI 时请带上： python -m app.cli --demo --user {user_id}")
         print("    （不绑用户 → 会话 auth.verified=false → 预约类请求会被判 need_info）")
+
+        # ── 登录账号 ──
+        # ★ 演示口令写死在种子里，因为它们**本来就是公开的演示账号**。
+        #   真上线时必须删掉这些账号（或改成部署时随机生成并只打印一次）。
+        #   口令本身够长（≥10 位）—— 密码强度靠长度，不靠复杂度。
+        for email, name, role in AGENT_ACCOUNTS:
+            await conn.execute(
+                """INSERT INTO ops.agent_user (agent_id, name, role, email, password_hash)
+                   VALUES ($1,$2,$3,$4,$5)
+                   ON CONFLICT (agent_id) DO UPDATE
+                   SET name = EXCLUDED.name, role = EXCLUDED.role,
+                       email = EXCLUDED.email, password_hash = EXCLUDED.password_hash""",
+                f"agent-{role}", name, role, email, auth.hash_password(DEMO_PASSWORD))
+        print("\n✓ 登录账号已就绪：")
+        print(f"    顾客端  {DEMO_EMAIL} / {DEMO_PASSWORD}")
+        for email, name, role in AGENT_ACCOUNTS:
+            print(f"    坐席端  {email} / {DEMO_PASSWORD}   （{name} · {role}）")
+        print("    ⚠ 演示口令，上线前必须删除这些账号或改成随机生成")
 
 
 async def _seed_kb(pg: PgStore, store: MilvusHybridStore, encoder: BgeM3Encoder,

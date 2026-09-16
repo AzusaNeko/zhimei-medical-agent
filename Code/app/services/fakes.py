@@ -111,6 +111,9 @@ class FakePg:
         self.handoff_events: list[dict] = []
         self.misreports: list[dict] = []
         self.sessions: dict[str, dict] = {}
+        #: 认证：C 端用户与坐席（与真实库同形）
+        self.users: dict[str, dict] = {}
+        self.agents: dict[str, dict] = {}
         #: 模型调用日志（与 PgStore.log_llm_call 同形）——
         #: 放在 fake 里是为了让"日志链路是否接对"在不需要 Postgres 时也能验证
         self.llm_calls: list[dict] = []
@@ -194,7 +197,8 @@ class FakePg:
         return rows[-limit:]
 
     async def list_sessions(self, *, limit: int = 30,
-                            channel: str | None = None) -> list[dict]:
+                            channel: str | None = None,
+                            user_id: str | None = None) -> list[dict]:
         """与 PgStore.list_sessions 同形（内存版）。
 
         ★ 必须同形：这两个实现会互换（fake 档位跑测试、real 档位跑生产），
@@ -203,6 +207,8 @@ class FakePg:
         out = []
         for sid, sess in self.sessions.items():
             if channel and sess.get("channel") != channel:
+                continue
+            if user_id and str(sess.get("user_id")) != str(user_id):
                 continue
             msgs = [m for m in self.messages if m.get("session_id") == sid]
             first_user = next((m["content"] for m in msgs if m.get("role") == "user"), None)
@@ -220,12 +226,110 @@ class FakePg:
         out.sort(key=lambda x: str(x.get("last_active_at") or ""), reverse=True)
         return out[:limit]
 
+    # ── 认证：C 端用户 ──
+    async def create_user(self, *, email: str, password_hash: str,
+                          display_name: str = "", verify_token: str | None = None,
+                          verify_expires: Any = None) -> dict:
+        key = email.lower()
+        if any(u.get("email") == key for u in self.users.values()):
+            raise ValueError("该邮箱已注册")
+        uid = str(uuid.uuid4())
+        self.users[uid] = {
+            "user_id": uid, "email": key,
+            "display_name": display_name or email.split("@")[0],
+            "password_hash": password_hash,
+            "email_verified": False,
+            "verify_token": verify_token,
+            "verify_expires": verify_expires,
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return {k: v for k, v in self.users[uid].items() if k != "password_hash"}
+
+    async def find_user_by_email(self, email: str) -> dict | None:
+        for u in self.users.values():
+            if u.get("email") == (email or "").lower():
+                return dict(u)
+        return None
+
+    async def get_user(self, user_id: str | None) -> dict | None:
+        if not user_id:
+            return None
+        u = self.users.get(str(user_id))
+        return {k: v for k, v in u.items() if k != "password_hash"} if u else None
+
+    async def verify_user_email(self, token: str) -> dict | None:
+        for u in self.users.values():
+            if u.get("verify_token") and u["verify_token"] == token:
+                u["email_verified"] = True
+                u["verify_token"] = None
+                u["verify_expires"] = None
+                return {k: v for k, v in u.items() if k != "password_hash"}
+        return None
+
+    async def touch_user_login(self, user_id: str) -> None:
+        u = self.users.get(str(user_id))
+        if u:
+            u["last_login_at"] = datetime.now(timezone.utc).isoformat()
+
+    # ── 认证：坐席 ──
+    async def find_agent_by_email(self, email: str) -> dict | None:
+        for a in self.agents.values():
+            if a.get("email") == (email or "").lower():
+                return dict(a)
+        return None
+
+    async def get_agent(self, agent_id: str) -> dict | None:
+        a = self.agents.get(agent_id)
+        return {k: v for k, v in a.items() if k != "password_hash"} if a else None
+
+    async def upsert_agent(self, *, agent_id: str, name: str, role: str,
+                           email: str | None = None,
+                           password_hash: str | None = None) -> dict:
+        cur = self.agents.get(agent_id) or {}
+        self.agents[agent_id] = {
+            "agent_id": agent_id, "name": name, "role": role,
+            "email": (email or cur.get("email") or "") or None,
+            "password_hash": password_hash or cur.get("password_hash"),
+            # ★ status 必须补上：真实表的这一列有 `DEFAULT 'active'`，
+            #   数据库会替我们填；内存字典不会。少了它，登录时会命中
+            #   "账号已被停用"分支 —— 又一个"fake 没有模拟数据库默认值"
+            #   造成的假故障（写上这些默认值，就是在模拟 DDL）。
+            "status": cur.get("status") or "active",
+        }
+        return {k: v for k, v in self.agents[agent_id].items() if k != "password_hash"}
+
+    async def touch_agent_login(self, agent_id: str) -> None:
+        a = self.agents.get(agent_id)
+        if a:
+            a["last_login_at"] = datetime.now(timezone.utc).isoformat()
+
     # ── 审计 ──
-    async def write_audit(self, **kw: Any) -> int:
-        self.audits.append(kw)
+    async def write_audit(self, *, thread_id: str, session_id: str, review_round: int,
+                          review_kind: str, verdict: str, risk_level: str, content_hash: str,
+                          panel_reviews: list[dict], escalation_used: bool,
+                          escalation_independent: bool, token_id: str | None = None,
+                          model_versions: dict | None = None,
+                          escalation_reason: str | None = None) -> int:
+        """★ 签名必须与 PgStore.write_audit **逐字一致**。
+
+        原来这里写的是 `async def write_audit(self, **kw)` —— 照单全收。
+        看起来"更宽容所以更安全"，实际相反：调用方把 `risk_level` 拼错成
+        `risk_lvl`，fake 档位照收不误、测试全绿，上真实库才 TypeError。
+        **fake 的宽容不是安全，是把错误推迟到更难查的地方。**
+        """
+        self.audits.append({
+            "thread_id": thread_id, "session_id": session_id, "review_round": review_round,
+            "review_kind": review_kind, "verdict": verdict, "risk_level": risk_level,
+            "content_hash": content_hash, "panel_reviews": panel_reviews,
+            "escalation_used": escalation_used,
+            "escalation_independent": escalation_independent, "token_id": token_id,
+            "model_versions": model_versions or {}, "escalation_reason": escalation_reason,
+        })
         return len(self.audits)
 
-    async def write_hard_rule_hits(self, hits: list[dict]) -> None:
+    async def write_hard_rule_hits(self, hits: list[dict],
+                                   *, audit_id: int | None = None) -> None:
         self.rule_hits.extend(hits)
 
     async def note_same_family_review(self, thread_id: str) -> None:
