@@ -403,6 +403,16 @@ async def main() -> int:
                 check("队列行带 SLA 基准（前端画超时标记用）",
                       isinstance(op_row.get("sla_seconds"), int),
                       str(op_row.get("sla_seconds")))
+                check("队列行带**风险等级**（展示口径，取代 P0/P1）",
+                      op_row.get("risk_level") in ("high", "medium", "low")
+                      and op_row.get("risk_label") in ("高风险", "中风险", "低风险"),
+                      f"risk_level={op_row.get('risk_level')!r} "
+                      f"label={op_row.get('risk_label')!r}")
+                check("风险等级带一句理由（红标必须能解释）",
+                      bool(op_row.get("risk_reason")), str(op_row.get("risk_reason")))
+                check("优先级仍然保留（SLA 与排序要用，只是不再做展示口径）",
+                      op_row.get("priority") in ("P0", "P1", "P2"),
+                      str(op_row.get("priority")))
                 nm = op_row.get("user_name") or ""
                 check("队列行带脱敏用户名（只留首字，其余打码）",
                       bool(nm) and ("*" in nm or len(nm) == 1)
@@ -412,6 +422,37 @@ async def main() -> int:
                       not (op_row.get("_raw_name")
                            and op_row["_raw_name"] == nm),
                       f"user_name={nm!r}")
+
+            # ── 风险等级的推导规则（纯函数，逐条锁死）──
+            # ★ 为什么不直接读 risk_report.risk_level：**它经常是空的**。
+            #   急诊工单走"固定模板 + 并行转人工"的快路径，根本不进审查子图，
+            #   所以 verdict=pass、risk_level=None —— 可那明显是最高风险的一类。
+            #   只认那个字段，最该优先处理的单子会掉进"低风险"窗口。
+            from app.ops import service as opsvc  # noqa: E402
+
+            risk_of = opsvc.risk_of
+            check("急诊工单 → 高风险（哪怕审查没给出风险等级）",
+                  risk_of({"priority": "P0", "reason": "emergency"})[0] == "high")
+            check("审查裁决交给人工 → 高风险（哪怕优先级只是 P2）",
+                  risk_of({"priority": "P2", "reason": "其他",
+                           "risk_report": {"verdict": "human"}})[0] == "high")
+            check("审查判为高风险 → 高风险",
+                  risk_of({"priority": "P2", "reason": "其他",
+                           "risk_report": {"risk_level": "high"}})[0] == "high")
+            check("优先级 P1 → 中风险",
+                  risk_of({"priority": "P1", "reason": "user_requested"})[0] == "medium")
+            check("常规咨询 → 低风险",
+                  risk_of({"priority": "P2", "reason": "clarify_exhausted"})[0] == "low")
+            check("摊平形态（队列查询给的就是这种）也认 —— 否则队列与详情会算出不同等级",
+                  risk_of({"priority": "P1", "reason": "x",
+                           "review_verdict": "human"})[0] == "high"
+                  and risk_of({"priority": "P2", "reason": "x",
+                               "review_risk_level": "medium"})[0] == "medium")
+            check("每个等级都有中文标签与处置说明（前端直接用）",
+                  all(k in opsvc.RISK_LABEL and k in opsvc.RISK_HINT
+                      for k in opsvc.RISK_ORDER))
+            check("等级顺序是从高到低（前端按它排窗口）",
+                  opsvc.RISK_ORDER == ("high", "medium", "low"), str(opsvc.RISK_ORDER))
 
             # ══════════════ 8 删除会话：工单快照要被抹掉、活动工单要挡住 ══════════════
             section("8. 删除会话：活动工单挡住，工单里的对话原文抹掉")

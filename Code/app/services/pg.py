@@ -511,6 +511,12 @@ class PgStore:
                       t.priority, t.status, t.profile_summary, t.assigned_to,
                       t.accepted_at, t.closed_at, t.close_reason, t.created_at, t.is_test,
                       u.display_name AS user_name,
+                      -- ★ 只取审查结论里要用的两个字段，不把整个 risk_report 拖出来：
+                      --   那个 JSONB 里还塞着 panel_reviews / evidence / draft，
+                      --   队列一屏几十行，没必要为两个字符串搬运几 MB。
+                      --   坐席要靠这两个值算**风险等级**（见 ops.service.risk_of）。
+                      t.risk_report->>'verdict'    AS review_verdict,
+                      t.risk_report->>'risk_level' AS review_risk_level,
                       (SELECT count(*) FROM app.chat_message m
                         WHERE m.session_id = t.session_id) AS msg_count
                FROM ops.handoff_ticket t

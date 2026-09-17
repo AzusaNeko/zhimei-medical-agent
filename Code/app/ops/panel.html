@@ -111,6 +111,34 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .badge.p1{background:var(--warn-soft);color:var(--warn)}
 .badge.p2{background:var(--surface-2);color:var(--ink-2)}
 .badge.st{background:var(--info-soft);color:var(--info-ink)}
+
+/* ── 风险等级徽章（队列的**展示口径**，取代原来的 P0/P1）──
+   三档：高/中/低。等级由 ops.service.risk_of 从多个来源推导，
+   并带一句理由（急诊信号 / 审查裁决交由人工 / 优先级 P1 …）——
+   红标必须能解释，否则只是情绪压力。 */
+.badge.rk{font-weight:600}
+.badge.rk.high{background:var(--bad-soft);color:var(--bad)}
+.badge.rk.medium{background:var(--warn-soft);color:var(--warn)}
+.badge.rk.low{background:var(--ok-soft,#e6f4ee);color:var(--ok,#1a5044)}
+.row .risk-why{color:var(--muted);font-size:11.5px}
+
+/* 风险分窗口：每个等级一个独立分区，各自滚动、各自计数 */
+.risksec{border-bottom:1px solid var(--line)}
+.risksec:last-child{border-bottom:0}
+.risksec-head{display:flex;align-items:center;gap:8px;padding:8px 18px;
+              background:var(--surface-2);position:sticky;top:0;z-index:1;
+              font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.risksec-head .n{font:11px/1.4 "JetBrains Mono","SF Mono",Consolas,monospace;
+                 padding:1px 7px;border-radius:9px;background:var(--surface-1);
+                 border:1px solid var(--line);color:var(--muted)}
+.risksec-head .hint{font-weight:400;color:var(--muted);font-size:11.5px}
+.risksec.high .risksec-head{background:var(--bad-soft);color:var(--bad)}
+.risksec.medium .risksec-head{background:var(--warn-soft);color:var(--warn)}
+.risksec.low .risksec-head{background:var(--ok-soft,#e6f4ee);color:var(--ok,#1a5044)}
+.risksec .none{padding:10px 18px;color:var(--muted);font-size:12px}
+/* 已结束的工单：详情里明确标出来，避免"看起来还在处理中" */
+.ended{margin:0 0 10px;padding:9px 12px;border-radius:7px;background:var(--surface-2);
+       border:1px solid var(--line);color:var(--ink-2);font-size:12.5px;line-height:1.6}
 .badge.warn{background:var(--bad-soft);color:var(--bad)}
 .badge.ok{background:var(--ok-soft);color:var(--ok)}
 .row .sub{color:var(--muted);font-size:12.5px}
@@ -668,18 +696,61 @@ async function purgeTest() {
   }
 }
 
+//: 风险等级的顺序、标题与说明。**与服务端 `ops.service.RISK_ORDER/RISK_LABEL` 一致。**
+//:
+//: ★ 展示口径是**风险等级**，不是 P0/P1：
+//:   P0/P1 是**调度优先级**（决定 SLA 阈值、排序），它回答"先做哪个"；
+//:   而坐下来处理一张单子的人，第一个要知道的是"这件事有多危险"。
+//:   两者经常一致、但并不总是一致 —— 比如优先级 P2 但审查裁决交给了人工，
+//:   那是**高风险**；而 P0 的急诊，风险当然也高。
+//:   所以队列按风险分三个窗口，而不是按优先级排一列。
+const RISK_ORDER = ["high", "medium", "low"];
+const RISK_LABEL = {high: "高风险", medium: "中风险", low: "低风险"};
+const RISK_HINT = {
+  high: "可能涉及安全或合规问题，请优先接单",
+  medium: "需要人工判断，按等待时长顺序处理",
+  low: "常规咨询转来的，可稍后处理",
+};
+
 function renderQueue() {
-  $("queueCount").textContent = `共 ${state.tickets.length} 条待处理`;
-  if (!state.tickets.length) {
+  const all = state.tickets || [];
+  $("queueCount").textContent = all.length ? `共 ${all.length} 条待处理` : "";
+
+  if (!all.length) {
     $("queue").innerHTML = '<div class="empty">当前没有待处理工单<br>'
-      + '<span style="font-size:11.5px">（已结束的工单不在队列里）</span></div>';
+      + '<span style="font-size:11.5px">（已结束的工单会立刻离开队列）</span></div>';
     return;
   }
-  $("queue").innerHTML = state.tickets.map((t) => `
+
+  // ★ 三个窗口**分开渲染**（而不是一个列表按风险排序）：
+  //   分窗口之后，"高风险里有没有人等着"这件事是**一眼可见**的 ——
+  //   排序还得自己找分界线，而分界线恰恰是最容易看漏的东西。
+  const byRisk = {high: [], medium: [], low: []};
+  for (const t of all) (byRisk[t.risk_level] || byRisk.low).push(t);
+
+  $("queue").innerHTML = RISK_ORDER.map((lvl) => {
+    const rows = byRisk[lvl];
+    const head = `<div class="risksec-head">
+        <span class="badge rk ${lvl}">${RISK_LABEL[lvl]}</span>
+        <span class="n">${rows.length}</span>
+        <span class="hint">${RISK_HINT[lvl]}</span>
+      </div>`;
+    const body = rows.length ? rows.map((t) => queueRow(t)).join("")
+      : `<div class="none">（没有${RISK_LABEL[lvl]}的工单）</div>`;
+    return `<div class="risksec ${lvl}">${head}${body}</div>`;
+  }).join("");
+
+  $("queue").querySelectorAll(".row").forEach((el) =>
+    el.addEventListener("click", () => openTicket(el.dataset.id)));
+}
+
+function queueRow(t) {
+  const lvl = t.risk_level || "low";
+  return `
     <div class="row ${state.current === t.ticket_id ? "active" : ""} ${t.is_test ? "is-test" : ""}"
          data-id="${t.ticket_id}">
       <div class="line1">
-        <span class="badge ${t.priority === "P0" ? "p0" : t.priority === "P1" ? "p1" : "p2"}">${esc(t.priority)}</span>
+        <span class="badge rk ${lvl}">${esc(t.risk_label || RISK_LABEL[lvl])}</span>
         <b>${esc(t.reason)}</b>
         <span class="badge st">${esc(t.status)}</span>
         ${t.is_test ? '<span class="badge test">测试</span>' : ""}
@@ -691,10 +762,12 @@ function renderQueue() {
         <span class="muted">/ SLA ${fmtWait(t.sla_seconds)}</span>
       </div>
       <div class="sub">${esc(t.context)}</div>
+      <div class="sub">
+        <span class="risk-why">为什么是${esc(t.risk_label || RISK_LABEL[lvl])}：${esc(t.risk_reason || "—")}</span>
+        · 调度优先级 ${esc(t.priority || "—")}
+      </div>
       <div class="sub">工单 ${esc(String(t.ticket_id).slice(0, 8))}… · 会话 ${esc(String(t.session_id).slice(0, 8))}…</div>
-    </div>`).join("");
-  $("queue").querySelectorAll(".row").forEach((el) =>
-    el.addEventListener("click", () => openTicket(el.dataset.id)));
+    </div>`;
 }
 
 // ── 详情 ──────────────────────────────────────────────
@@ -735,6 +808,13 @@ function renderDetail() {
     `<div class="msg ${esc(m.role)}">${esc(m.content)}</div>`).join("");
 
   $("detail").innerHTML = `
+    ${ACTIVE_STATUSES.includes(t.status) ? "" : `<div class="ended">
+      <b>该工单已结束</b>（${esc(t.status)}），已从待处理队列移除，
+      AI 已恢复自动回复 —— 顾客之后说的话由 AI 处理，不会再转到这里。
+      ${t.closed_at ? `关闭时间 ${esc(String(t.closed_at).slice(0, 19).replace("T", " "))}。` : ""}
+      ${t.close_reason ? `关闭原因：${esc(t.close_reason)}` : ""}
+      <br>下面是这张单子的存档内容，仅供回看。
+    </div>`}
     ${rp.transcript_deleted ? `<div class="tdel">
       <b>对话原文已被顾客删除。</b>按用户的删除请求，本工单里保存的对话快照与
       AI 草稿已抹除；审查结论（下面的规则命中与面板意见）按合规要求保留。

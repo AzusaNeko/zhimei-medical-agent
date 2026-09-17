@@ -14,7 +14,7 @@
 | 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 96 项断言全过） |
 | 四个典型场景端到端演示 | ✅ 已验证（科普含修订环 / 预约含确认执行 / 紧急 / 澄清） |
 | **FastAPI + SSE 接口层** | ✅ **已实现并验证**（`scripts/smoke_api.py` 50 项 + `smoke_api_live.py` 57 项真实 HTTP） |
-| **运营后台（坐席工作台）** | ✅ **已实现并验证**（`scripts/smoke_ops.py` 66 项；面板 + 队列 + 跨模块联动） |
+| **运营后台（坐席工作台）** | ✅ **已实现并验证**（`scripts/smoke_ops.py` 77 项；面板 + 风险分级队列 + 跨模块联动） |
 | **C 端聊天页 + Agent 执行轨迹可视化** | ✅ **已实现**（`app/web/chat.html`；`scripts/check_ui.cjs` 静态校验） |
 | 真实依赖（Postgres / Milvus / BGE / DeepSeek） | ✅ **已在本机跑通**（`check_env` 18 通过 / 0 阻塞；四场景 `--demo` 退出码 0） |
 | 成本与延迟观测 | ✅ `app.llm_call_log` 已接入；`scripts/llm_stats.py` 出报表 |
@@ -229,7 +229,7 @@ python scripts/check_schema.py                                # 新建库 + 升�
 ```bash
 python -m app.api --port 8090            # real 档位；加 --profile fake 则不需要任何外部依赖
 # 浏览器打开 http://127.0.0.1:8090/chat
-node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点表同步 / DOM id / 测试工单隔离 / 页面启动 / 工作流架构 / 接管状态 / 删除，69 项）
+node scripts/check_ui.cjs                # 前端静态校验（语法 / 节点表同步 / DOM id / 测试工单隔离 / 页面启动 / 工作流架构 / 接管状态 / 删除 / 风险分窗队列，96 项）
 ```
 
 同样是**单文件 HTML + 原生 JS**（`app/web/chat.html`，无构建步骤、无 CDN），由 FastAPI 托管。
@@ -444,7 +444,7 @@ DELETE /api/sessions/{session_id}
 ```bash
 python -m app.api --profile fake --port 8077
 # 浏览器打开 http://127.0.0.1:8077/ops/panel
-python scripts/smoke_ops.py        # 66 项（不变量、跨模块联动、权限与脱敏、接管、删除）
+python scripts/smoke_ops.py        # 77 项（不变量、跨模块联动、权限与脱敏、接管、删除、风险分级；含 REST↔SSE 字段集一致性）
 ```
 
 > 两个页面配合起来演示最完整：`/chat` 是顾客侧（提问 → 看轨迹 → 确认操作），
@@ -664,8 +664,9 @@ Code/
 │  ├─ check_store_parity.py    # PgStore 与 FakePg 的接口必须逐字一致
 │  ├─ check_schema.py          # 新建库 + 升级旧库两条路径都要能跑通（36 项）
 │  ├─ multi_turn_cases.py      # 多轮对话案例集（跨轮才会暴露的行为，见 SELF-TEST 6d）
-│  ├─ check_ui.cjs             # 前端静态校验：语法 / 节点表同步 / 测试工单隔离 / 页面启动 / 工作流架构 / 删除（69 项）
-│  └─ seed_kb.py               # 演示数据播种
+│  ├─ check_ui.cjs             # 前端静态校验：语法 / 节点表同步 / 测试工单隔离 / 页面启动 / 工作流架构 / 删除 / 风险分窗队列（96 项）
+│  ├─ check_retrieval.py       # 检索验收：带期望文档的表（15 条，含安全关键阈值把关）
+│  └─ seed_kb.py               # 演示数据播种（15 篇 / 84 chunk，幂等 + Milvus 对账）
 ├─ sql/schema.sql              # app / ops schema 表结构 + 增量变更（加列必读文末第 10 节）
 ├─ docker-compose.yml          # Postgres + Milvus（etcd + minio）
 └─ tests/test_smoke.py         # 同样的断言，pytest 形态（需 pip install pytest-asyncio）

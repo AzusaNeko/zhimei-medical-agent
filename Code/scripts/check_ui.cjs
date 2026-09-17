@@ -773,6 +773,70 @@ const MINI_ARCH = {
           /localStorage\.setItem\(SPLIT_STORE/.test(html));
   }
 
+  // ── M. 坐席队列按**风险等级**分窗口 ──
+  //
+  //  ★ 展示口径从 P0/P1 换成风险等级，是因为两者回答的不是同一个问题：
+  //    P0/P1 是**调度优先级**（决定 SLA 与排序），回答"先做哪个"；
+  //    坐下来处理一张单子的人，第一个要知道的是"这件事有多危险"。
+  //    它们经常一致但并不总一致 —— 优先级 P2 但审查裁决交给了人工，那是高风险。
+  //  ★ 分**三个窗口**而不是排成一列：分窗口之后"高风险里有没有人等着"一眼可见；
+  //    排序还得自己找分界线，而分界线恰恰最容易看漏。
+  console.log('\nM. 坐席队列按风险等级分窗口');
+  const QSTUB = [
+    {ticket_id: 'T-H', session_id: 'S-H', reason: 'emergency', priority: 'P0',
+     status: 'open', wait_seconds: 480, sla_seconds: 300, sla_breached: true,
+     accepted_at: null, assigned_to: null, context: 'emergency · 术后异常',
+     is_test: false, msg_count: 3, user_name: '演***',
+     risk_level: 'high', risk_label: '高风险', risk_reason: '急诊信号'},
+    {ticket_id: 'T-M', session_id: 'S-M', reason: 'user_requested', priority: 'P1',
+     status: 'in_progress', wait_seconds: 90, sla_seconds: 1800, sla_breached: false,
+     accepted_at: '2026-01-01T00:00:00Z', assigned_to: 'agent-service',
+     context: 'user_requested · 顾客主动要求', is_test: false, msg_count: 5,
+     user_name: '张**', risk_level: 'medium', risk_label: '中风险', risk_reason: '优先级 P1'},
+    {ticket_id: 'T-L', session_id: 'S-L', reason: 'clarify_exhausted', priority: 'P2',
+     status: 'open', wait_seconds: 30, sla_seconds: 7200, sla_breached: false,
+     accepted_at: null, assigned_to: null, context: 'clarify_exhausted · 问了几次没答上来',
+     is_test: false, msg_count: 9, user_name: '李**',
+     risk_level: 'low', risk_label: '低风险', risk_reason: '常规咨询'},
+  ];
+  const panelQ = await bootPage(panelHtml, {
+    token: TOKEN,
+    routes: {
+      '/ops/auth/me': { agent: { agent_id: 'a1', name: '客服小美', role: 'service' },
+                        permissions: ['ticket:read'], sees_raw_pii: false },
+      '/ops/tickets': { agent: { agent_id: 'a1' }, tickets: QSTUB, include_test: false },
+      '/ops/metrics': { tickets_total: 3, tickets_open: 3, review_rounds: 0, hard_rule_top: [] },
+    },
+  });
+  const pdoc = panelQ.ctx && panelQ.ctx.document;
+  const qbox = pdoc && pdoc.getElementById('queue');
+  const qhtml = String(qbox && qbox.innerHTML);
+  check('队列渲染了三个风险窗口（高 / 中 / 低）',
+        (qhtml.match(/class="risksec /g) || []).length === 3,
+        `实际 ${(qhtml.match(/class="risksec /g) || []).length} 个区块`);
+  for (const [lvl, label] of [['high', '高风险'], ['medium', '中风险'], ['low', '低风险']]) {
+    check(`「${label}」窗口存在且带条数`, qhtml.includes(`risksec ${lvl}`)
+          && qhtml.includes(`badge rk ${lvl}`), `${label} 区块缺失`);
+  }
+  check('行上用的是**风险等级**徽章，不再是 P0/P1',
+        qhtml.includes('badge rk high') && !/badge p0|badge p1|badge p2/.test(qhtml),
+        '还残留按优先级着色的徽章');
+  check('每行带等待时长与 SLA 基准',
+        qhtml.includes('已等待') && qhtml.includes('SLA'), '缺等待时长');
+  check('每行带脱敏发起人（只留首字）',
+        qhtml.includes('演***') && qhtml.includes('张**'), '缺发起人');
+  check('高风险行**带一句理由**（红标必须能解释）',
+        qhtml.includes('为什么是高风险') && qhtml.includes('急诊信号'),
+        '没有给出等级理由');
+  check('优先级降级为次要信息（仍保留，供 SLA 与排序用）',
+        qhtml.includes('调度优先级 P0'), '优先级完全消失了');
+  check('已结束的工单会被标成"已结束"而不是继续像活动工单',
+        /该工单已结束/.test(String(scriptOf(panelHtml))),
+        '详情里没有"已结束"提示');
+  check('空队列时明确说明"已结束的会立刻离开队列"',
+        /已结束的工单会立刻离开队列/.test(String(scriptOf(panelHtml))),
+        '空态没说明');
+
   console.log(`\n${'═'.repeat(56)}`);
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);
   console.log('═'.repeat(56));

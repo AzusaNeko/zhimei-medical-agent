@@ -332,7 +332,11 @@ def _queue_row(t: dict) -> dict:
     return {k: t.get(k) for k in ("ticket_id", "session_id", "reason", "priority", "status",
                                   "wait_seconds", "sla_seconds", "sla_breached",
                                   "accepted_at", "assigned_to", "context",
-                                  "is_test", "msg_count", "user_name")}
+                                  "is_test", "msg_count", "user_name",
+                                  # 队列按**风险等级**分窗口展示（不再用 P0/P1 做展示口径）。
+                                  # 这三个字段必须跟着快照一起走，否则 SSE 每 3 秒一刷新，
+                                  # 分窗口就失去依据、行上的等级也会变回空白。
+                                  "risk_level", "risk_label", "risk_reason")}
 
 
 # ════════════════════════════════════════════════════════════════

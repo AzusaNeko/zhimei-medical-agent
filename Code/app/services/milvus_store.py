@@ -84,6 +84,60 @@ class MilvusHybridStore:
             return 0
         return self.client.upsert(collection_name=self.collection, data=rows)
 
+    def delete_pks(self, pks: list[int]) -> int:
+        """按主键删除向量。
+
+        ★ 为什么需要它：文档**变短**时（改了内容、删了一段），只 upsert 新 chunk
+          是不够的 —— 旧的 chunk 行还留在集合里，于是检索会把一段**已经不存在
+          于文档中**的文本召回来，并且它还会带着旧的 doc_id 出现在引用里。
+          这种"幽灵证据"比检索不到更糟：它看起来有据可依，实际依据早被删了。
+
+        ★ Milvus 的删除是**标记删除**，后续查询会过滤掉，但磁盘空间要等
+          compact 才回收。对一个种子脚本来说这完全够用。
+
+        ★ 这里踩过一个**静默**的坑，别再改回去：
+          最初写的是 `client.delete(collection_name=..., expr=f"pk in [...]")`。
+          pymilvus 2.4 的签名是
+              delete(collection_name, ids=None, timeout=None, filter=None,
+                     partition_name=None, **kwargs)
+          ——参数叫 **filter**，没有 `expr`。多出来的 `expr` 被 `**kwargs` 收走，
+          `filter` 保持默认 None，于是报"expr must be string, but NoneType is given"。
+          更麻烦的是它**只在真正有条目要删时才炸**：文档没变短的每次 seed 都跳过这段，
+          于是这个函数从写下到第一次真删之间，一直看起来是好的。
+          自测要覆盖"真的删掉一条"，而不是只测"调用没报错"。
+        """
+        if not pks:
+            return 0
+        # 走 ids= 而不是自己拼 filter 表达式：pymilvus 会做参数校验，
+        # 拼字符串则可能拼出一个语法合法但语义错的表达式（静默查不到）。
+        res = self.client.delete(collection_name=self.collection,
+                                 ids=[int(p) for p in pks])
+        return int(res.get("delete_count", res.get("delete_cnt", 0)) or 0)
+
+    def list_pk_docs(self) -> list[dict[str, Any]]:
+        """列出集合里现存的 (pk, doc_id)，供"以 PG 为准"的对账使用。
+
+        ★ 为什么需要它：只按 PG 里的文档清单去删，救不了**两边已经不一致**的情况 ——
+          比如某篇文档在 PG 里被改过名，删除逻辑在旧的 doc_id 下找不到任何行，
+          而 Milvus 里那批向量还留着。它们会被检索召回、出现在引用里，
+          但 PG 里查无此 chunk —— 一条无法追溯的"证据"。
+          所以对账的基准必须是**Milvus 实际有什么**，而不是"我以为我写过什么"。
+
+        ★ 同时返回 doc_id 而不是只返回 pk：调用方需要判断这条向量到底属于
+          "已经彻底消失的文档"（真幽灵，该删）还是"仍然存在于 PG、只是不归本脚本管"
+          （人工录入的文档，删了就是事故）。只给 pk 的话，调用方无从区分。
+        """
+        # Milvus 单次 query 有上限（默认 16384），分批取完，避免对账对了个寂寞
+        batch, out, offset = 16384, [], 0
+        while True:
+            rows = self.client.query(
+                collection_name=self.collection, filter="pk >= 0",
+                output_fields=["pk", "doc_id"], limit=batch, offset=offset)
+            out.extend({"pk": int(r["pk"]), "doc_id": r.get("doc_id", "")} for r in rows)
+            if len(rows) < batch:
+                return out
+            offset += batch
+
     # ══════════════ 混合检索 ══════════════
     async def search(self, *, query_text: str, query_dense: list[float],
                      query_sparse: dict[str, float], projects: list[str] | None = None,
@@ -132,7 +186,19 @@ class MilvusHybridStore:
         expr = f'doc_status == "approved" and (expire_at == 0 or expire_at > {now})'
         if projects:
             quoted = ", ".join(f'"{p}"' for p in projects)
-            expr += f" and project in [{quoted}]"
+            # ★★ 必须把 project == "" 一起放进来，不能只写 `project in [...]` ★★
+            #
+            #   通用资料（通用风险与紧急信号、术后护理总则、资质核实、项目对比、
+            #   费用口径、常见问题）**不属于任何单个项目**，落库时 project 存的是空串。
+            #   只写 `project in ["热玛吉"]` 会把它们全部排除掉 —— 于是：
+            #      用户问"热玛吉有什么风险"，而那份写着"出现下列情况请立即就医"
+            #      的通用风险资料，因为不带"热玛吉"标签而被过滤掉了。
+            #   这不是"少召回一条"，是把**最该出现的那条**挡在门外：
+            #   检索结果看起来仍然很合理（全是热玛吉的资料），
+            #   没有任何报错、没有任何日志异常，只有内容悄悄变差。
+            #
+            #   过滤的本意是"优先本项目的资料"，不是"只准本项目的资料"。
+            expr += f' and (project in [{quoted}] or project == "")'
         if doc_type:
             expr += f' and doc_type == "{doc_type}"'
 

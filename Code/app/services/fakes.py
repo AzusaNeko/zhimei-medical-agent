@@ -502,8 +502,14 @@ class FakePg:
             sid = t.get("session_id")
             n = sum(1 for m in self.messages if m.get("session_id") == sid)
             u = self.users.get(t.get("user_id")) or {}
+            rep = t.get("risk_report") or {}
             out.append({**t, "msg_count": n,
-                        "user_name": u.get("display_name")})
+                        "user_name": u.get("display_name"),
+                        # 与 PgStore 同形：真实库把这两个字段从 risk_report 里单独取出来
+                        # （避免搬整个 JSONB），fake 也摊平 —— 否则"队列里算出来的
+                        # 风险等级"和"详情里算出来的"两边会不一致。
+                        "review_verdict": rep.get("verdict"),
+                        "review_risk_level": rep.get("risk_level")})
         return out
 
     async def purge_test_tickets(self) -> int:

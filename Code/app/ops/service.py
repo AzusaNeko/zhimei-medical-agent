@@ -50,6 +50,63 @@ ACTIVE_STATUSES: tuple[str, ...] = ("open", "accepted", "in_progress", "escalate
 
 
 # ════════════════════════════════════════════════════════════════
+#  风险等级（队列按它分窗口展示）
+# ════════════════════════════════════════════════════════════════
+#: 三档风险等级，从高到低。前端**按这个顺序**分窗口展示。
+RISK_ORDER: tuple[str, ...] = ("high", "medium", "low")
+
+RISK_LABEL: dict[str, str] = {"high": "高风险", "medium": "中风险", "low": "低风险"}
+
+#: 每个等级一句话说明"这一档意味着什么、该怎么处置"（面板上直接显示）。
+RISK_HINT: dict[str, str] = {
+    "high": "可能涉及安全或合规问题，请优先接单",
+    "medium": "需要人工判断，按等待时长顺序处理",
+    "low": "常规咨询转来的，可稍后处理",
+}
+
+
+def risk_of(ticket: dict) -> tuple[str, str]:
+    """推导工单的**风险等级**与**理由**（纯函数，便于单测）。
+
+    ★ 为什么不直接读 `risk_report.risk_level`：**它经常是空的**。
+      急诊工单走的是"固定模板 + 并行转人工"的快路径，根本不进审查子图，
+      所以 verdict=pass、risk_level=None —— 可那明显是**最高**风险的一类。
+      只认那个字段的话，最该优先处理的单子会掉进"低风险"窗口。
+
+    ★ 所以这里做**多来源推导**，并且**把理由一起返回**：
+      坐席看到"高风险"必须能知道为什么（急诊信号？还是审查判给人的？），
+      否则一个红标只带来情绪压力，不带来信息。
+
+    判定顺序（先命中先算）：
+      1. 转人工原因就是急诊 / 优先级 P0         → 高（安全类）
+      2. 审查裁决是 human（模型认为该由人定夺）  → 高（合规类）
+      3. 审查给出的风险等级 high                → 高
+      4. 优先级 P1 / 审查等级 medium             → 中
+      5. 其余                                   → 低
+    """
+    priority = str(ticket.get("priority") or "").upper()
+    reason = str(ticket.get("reason") or "")
+    # ★ 两种形态都认：真实库的 list_tickets 把两个字段**单独取出来**了
+    #   （`review_verdict` / `review_risk_level`，避免搬整个 JSONB），
+    #   而详情等其他调用方拿到的是完整的 `risk_report`。
+    #   只认一种的话，"队列里算出来的等级"和"详情里算出来的等级"会不一致 ——
+    #   那种 bug 极难发现，因为两处看起来都对。
+    report = ticket.get("risk_report") or {}
+    verdict = str(ticket.get("review_verdict") or report.get("verdict") or "")
+    reviewed = str(ticket.get("review_risk_level") or report.get("risk_level") or "").lower()
+
+    if reason == "emergency" or priority == "P0":
+        return "high", "急诊信号" if reason == "emergency" else "优先级 P0"
+    if verdict == "human":
+        return "high", "审查裁决交由人工"
+    if reviewed == "high":
+        return "high", "审查判为高风险"
+    if priority == "P1" or reviewed == "medium":
+        return "medium", "审查判为中风险" if reviewed == "medium" else "优先级 P1"
+    return "low", "常规咨询"
+
+
+# ════════════════════════════════════════════════════════════════
 #  队列与详情
 # ════════════════════════════════════════════════════════════════
 async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = None,
@@ -67,11 +124,19 @@ async def list_queue(rt: Runtime, agent: Agent, *, statuses: list[str] | None = 
         created = _parse(t.get("created_at"))
         waited = int((now - created).total_seconds()) if created else 0
         sla = SLA_SECONDS.get(t.get("priority", "P2"), SLA_SECONDS["P2"])
+        risk, risk_reason = risk_of(t)
         out.append({
             "ticket_id": t.get("ticket_id"),
             "session_id": t.get("session_id"),
             "reason": t.get("reason"),
+            # ★ `priority` 仍然保留，但**不再作为展示口径**：
+            #   它是**调度优先级**（决定 SLA 阈值、排序），不是"这件事有多危险"。
+            #   坐席要看的是风险等级 —— 见 risk_of 的说明。
             "priority": t.get("priority"),
+            "risk_level": risk,
+            "risk_label": RISK_LABEL[risk],
+            # 为什么是这个等级：红标必须带理由，否则只是情绪压力
+            "risk_reason": risk_reason,
             "status": t.get("status"),
             "wait_seconds": waited,
             "sla_seconds": sla,
