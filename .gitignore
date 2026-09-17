@@ -76,3 +76,8 @@ desktop.ini
 /.commit-msg*
 /.git-commit-msg.txt
 *.tmp
+
+# ── Superdesign 临时产物 ──
+# 提示词全文、组件模板草稿、CLI 调用 spec。这些是"发送给远端设计服务的中间态"，
+# 不是产品资产，必须留在本地。
+.superdesign/tmp/

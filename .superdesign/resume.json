@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "/chat": {
+      "targetKind": "existing-ui",
+      "projectId": "f8780f31-ce0b-48f9-8a8b-bc40d3b08f0a",
+      "baselineDraftId": "3b6961bb-8508-42fd-bbcb-bf562d50d1b2",
+      "activeDraftId": "4b152dcb-6ddb-4903-9f3c-94392d7bde4e",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "Code/app/web/chat.html:1:394",
+        "Code/app/web/chat.html:1063:1199"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "43664da130fd8a1e83c4dc85223217aa6207e21d86a6c6e7241332aad666774e",
+        "Code/app/web/chat.html": "38f5f59a8daba850fde85607b72a6f8fbcc1c5bc2712b01ba10a6642afea2feb"
+      },
+      "components": [
+        {
+          "name": "PaneShell",
+          "id": "c5f449f5-7ccc-4cfa-b727-7ed714793c6e",
+          "sourcePath": "Code/app/web/chat.html"
+        },
+        {
+          "name": "OpsTopbar",
+          "id": "03c1be77-ec08-4fb4-821b-101742efc994",
+          "sourcePath": "Code/app/ops/panel.html"
+        }
+      ],
+      "drafts": {
+        "3b6961bb-8508-42fd-bbcb-bf562d50d1b2": {
+          "title": "当前界面 · 基线复刻",
+          "visualDirection": "baseline pixel-perfect reproduction of the existing navy+teal UI — ground truth for Step 3b, no design change"
+        },
+        "4b152dcb-6ddb-4903-9f3c-94392d7bde4e": {
+          "title": "智美医美顾问 - Clinical Precision",
+          "visualDirection": "SELECTED 并已落地到 Code/app/web/chat.html。临床白 · Clinical Precision：hairline 1px 描边优先、零卡片阴影、主色 #0B6E6E、卡片 8px 圆角、正文 14px/1.65、等宽 JetBrains Mono 对齐数据。落地后按用户要求在实现上多做了三处（见 design-system.md 第 3 节第 11–13 条、第 6 节第 9–10 条）：① 工作流架构与执行轨迹拆成两张独立卡片、左右排布；② 所有原生 alert/confirm/prompt 换成自建 window.dialogs；③ 栏间加可拖拽分隔条（宽度走 CSS 变量 + fr 单位、持久化到 localStorage）。草稿里 Superdesign 自创的 logo、「正式档/调试档」开关、「工作台」导航与改动过的 eyebrow 文案一律未采用（违反无 CDN / 不改功能的约束）。",
+          "parentDraftId": "3b6961bb-8508-42fd-bbcb-bf562d50d1b2",
+          "currentVersion": 2
+        },
+        "908c0eb1-a9df-4a69-906c-3bf9393fa8db": {
+          "title": "智美医美顾问 - 暖瓷风格 (Warm Porcelain)",
+          "visualDirection": "rejected branch. 暖瓷 · Warm Porcelain：高端医美诊所接待空间，暖陶土主色 #9C5F4E、柔和层叠阴影替代硬描边、卡片 16px 圆角、正文 15px/1.8",
+          "parentDraftId": "3b6961bb-8508-42fd-bbcb-bf562d50d1b2"
+        }
+      },
+      "updatedAt": "2026-09-17T04:56:54+08:00"
+    },
+    "/ops/panel": {
+      "targetKind": "new-ui",
+      "projectId": "f8780f31-ce0b-48f9-8a8b-bc40d3b08f0a",
+      "activeDraftId": "565aa996-0bf5-43a1-a09c-b11d85a01705",
+      "sourceTarget": "/chat",
+      "sourceDraftId": "4b152dcb-6ddb-4903-9f3c-94392d7bde4e",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "Code/app/ops/panel.html:1:175"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "43664da130fd8a1e83c4dc85223217aa6207e21d86a6c6e7241332aad666774e",
+        "Code/app/ops/panel.html": "4b60315039045dda968694e8e8173722c4f40e425ad8b9d735ac36774a6d1b60"
+      },
+      "components": [
+        {
+          "name": "PaneShell",
+          "id": "c5f449f5-7ccc-4cfa-b727-7ed714793c6e",
+          "sourcePath": "Code/app/web/chat.html"
+        },
+        {
+          "name": "OpsTopbar",
+          "id": "03c1be77-ec08-4fb4-821b-101742efc994",
+          "sourcePath": "Code/app/ops/panel.html"
+        }
+      ],
+      "drafts": {
+        "565aa996-0bf5-43a1-a09c-b11d85a01705": {
+          "title": "坐席工作台 /ops/panel",
+          "visualDirection": "已落地到 Code/app/ops/panel.html。临床白 · Clinical Precision（与 /chat 同皮肤）：顶栏 + 登录浮层 + 6 张指标卡 + 两栏队列/详情，功能与中文文案不变。落地后按用户要求多做了：3 处原生弹窗换成自建 window.dialogs（清理测试工单、关闭原因必填、命中软规则仍发送）；两栏之间加可拖拽分隔条；顺带修掉 .auth-msg 引用未声明的 --bad 这个真实 bug。",
+          "parentDraftId": "4b152dcb-6ddb-4903-9f3c-94392d7bde4e",
+          "currentVersion": 1
+        }
+      },
+      "updatedAt": "2026-09-17T04:56:54+08:00"
+    }
+  }
+}

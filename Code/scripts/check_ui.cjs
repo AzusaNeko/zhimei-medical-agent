@@ -692,9 +692,12 @@ const MINI_ARCH = {
   check('会话列表每一行都有删除按钮', Boolean(delBtn),
         `行内元素：${rowEl && rowEl.children.map((c) => c.className)}`);
   if (delBtn && ddoc) {
-    // ① 先点"取消"（confirm=false）→ 不该发请求
+    // ① 先点"取消" → 不该发请求
+    //    ★ 弹窗已从原生 confirm 换成自建弹窗（window.dialogs），这里替换的是
+    //      自建弹窗那一层入口。断言意图完全不变：取消不发请求、确认才发，
+    //      且确认文案必须**逐条**说明删什么、留什么。
     let asked = "";
-    del.ctx.confirm = (msg) => { asked = String(msg); return false; };
+    del.ctx.dialogs.confirm = async (o) => { asked = JSON.stringify(o); return false; };
     // ★ 注意：开机时 afterLogin → switchTo 已经拉过一次会话详情了，
     //   所以这里要比**增量**，不能比"有没有出现过" —— 否则永远为真。
     const openCount = () => del.seen.filter(
@@ -712,8 +715,8 @@ const MINI_ARCH = {
     check('用户取消时**不发**删除请求', del.seen.length === before,
           `又发了 ${del.seen.length - before} 个请求`);
 
-    // ② 点"确定"（confirm=true）→ 该发 DELETE
-    del.ctx.confirm = () => true;
+    // ② 点"确定" → 该发 DELETE
+    del.ctx.dialogs.confirm = async () => true;
     delBtn.onclick({ stopPropagation() {} });
     await new Promise((r) => setTimeout(r, 60));
     check('确认后才真的发 DELETE 请求',
@@ -724,6 +727,51 @@ const MINI_ARCH = {
         /api\("\/api\/sessions\/" \+ c\.session_id, \{method: "DELETE"\}\)/.test(
           stripComments(scriptOf(chatHtml))),
         '没有找到 DELETE 调用');
+
+  // ── K. 弹窗一律自建 ────────────────────────────────────────────
+  //   原生 alert / confirm / prompt 的问题：样式由浏览器决定、与整页视觉脱节
+  //   且完全无法定制；confirm / alert 还**同步阻塞**页面；prompt 只有单行输入、
+  //   做不了必填校验（坐席"关闭原因"是必填的，原生点确定给个空串也能过去）。
+  //   两页统一改用自建弹窗 window.dialogs。
+  console.log('\nK. 弹窗（一律自建，不用原生）');
+  // ★ 负向后行断言把 dialogs.confirm(...) / dialogs.prompt(...) 这类**带点**的调用
+  //   排除掉，否则自建弹窗自己会被误判成原生弹窗。
+  //   Node 的 V8 支持后行断言（ripgrep 不支持，所以别指望用 rg 复核这条）。
+  const NATIVE_DIALOG = /(?<![.\w$])(alert|confirm|prompt)\s*\(/;
+  for (const [name, html] of [['chat.html', chatHtml], ['panel.html', panelHtml]]) {
+    const body = stripComments(scriptOf(html));
+    const hit = NATIVE_DIALOG.exec(body);
+    check(`${name} 不再使用原生 alert / confirm / prompt`, !hit,
+          hit ? `残留原生弹窗调用：${hit[0]}` : '');
+    check(`${name} 定义了自建弹窗入口 window.dialogs`, /window\.dialogs\s*=/.test(body));
+  }
+
+  // ── L. 卡片可拉伸（拖分隔条改宽度）────────────────────────────
+  //   分隔条占的就是栏间距本身：拖拽把手与视觉间距是同一个东西，
+  //   不额外占空间，也不会让整页多出几条常驻竖线。
+  console.log('\nL. 卡片可拉伸（拖分隔条改宽度）');
+  const countSplitters = (h) => (h.match(/class="splitter"/g) || []).length;
+  check('chat.html 四栏之间有 3 条分隔条', countSplitters(chatHtml) === 3,
+        `实际 ${countSplitters(chatHtml)} 条`);
+  check('panel.html 两栏之间有 1 条分隔条', countSplitters(panelHtml) === 1,
+        `实际 ${countSplitters(panelHtml)} 条`);
+  for (const [name, html] of [['chat.html', chatHtml], ['panel.html', panelHtml]]) {
+    const flat = html.replace(/\s+/g, ' ');
+    check(`${name} 分隔条可聚焦并声明 separator 语义（键盘也能用）`,
+          /<div class="splitter"[^>]*role="separator"[^>]*tabindex="0"/.test(flat));
+    check(`${name} 分隔条是 col-resize 拖拽光标`, /\.splitter\{[^}]*cursor:col-resize/.test(html));
+    check(`${name} 堆叠/单栏模式下隐藏分隔条`, /\.splitter\{display:none\}/.test(html));
+    // ★ 这条最关键：宽度必须走 CSS 变量。直接内联 grid-template-columns 会因为
+    //   优先级高于媒体查询，把窄屏的堆叠布局永久钉死 —— 再也回不去。
+    check(`${name} 宽度走 CSS 变量、不内联 grid-template-columns`,
+          /var\(--col-1/.test(html) &&
+          /setProperty\("--col-"/.test(html) &&
+          !/style\.gridTemplateColumns/.test(html));
+    check(`${name} 拖动用 pointer 事件且宽度持久化`,
+          /addEventListener\("pointerdown"/.test(html) &&
+          /addEventListener\("pointermove"/.test(html) &&
+          /localStorage\.setItem\(SPLIT_STORE/.test(html));
+  }
 
   console.log(`\n${'═'.repeat(56)}`);
   console.log(`通过 ${pass} 项，失败 ${fail} 项`);
