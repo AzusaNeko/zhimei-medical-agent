@@ -124,6 +124,24 @@ class Settings:
     recall_k: int = field(default_factory=lambda: _i("RECALL_K", 40))
     rerank_top_k: int = field(default_factory=lambda: _i("RERANK_TOP_K", 8))
     max_evidence: int = field(default_factory=lambda: _i("MAX_EVIDENCE", 6))
+
+    #: 证据准入 = **绝对下限 + 相对系数**，两者一起用（选法见 sub_knowledge.select_evidence）。
+    #:
+    #: ★ 这里曾经只有 `MIN_RERANK=0.30` 一条绝对线，那是错的 ——
+    #:   bge-reranker-v2-m3 的分数是 sigmoid 概率，**绝对值取决于问法与文风**，
+    #:   不是纯粹的"相不相关"。实测：完全不相关的问题最高分 0.0000–0.0002，
+    #:   而"皮秒做完会不会反黑"（资料里字面就有"反黑"）只有 0.1831。
+    #:   相关证据低到 0.15、不相关低到 0.000，差三个数量级 ——
+    #:   一条 0.30 的绝对线卡掉的**全是相关的**：15 条检索验收里 5 条
+    #:   "命中了正确文档、分数却不到 0.30"，证据被丢光，回答降级成"资料不足"。
+    rerank_floor: float = field(default_factory=lambda: _f("RERANK_FLOOR", 0.02))
+    #: 只保留"最高分 × 该系数"以上的候选，用来丢掉明显更差的长尾。
+    #: 它是**相对于本轮最好证据**判断的，因此不受问法与文风影响。
+    rerank_rel_ratio: float = field(default_factory=lambda: _f("RERANK_REL_RATIO", 0.5))
+
+    #: ⚠️ 语义已变更：这**不再**是准入门槛，而是"弱证据"信号。
+    #:   最高分没到它 → 证据仍会被使用，但一定额外走一次"证据是否充分"的独立判断
+    #:   （原来只在"高影响场景"才走）。放松闸门必须配上更严的复核，不能只放松。
     min_rerank: float = field(default_factory=lambda: _f("MIN_RERANK", 0.30))
 
     # ── 规则 ──

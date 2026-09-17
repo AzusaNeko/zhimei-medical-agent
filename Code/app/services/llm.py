@@ -411,11 +411,31 @@ def _scripted_payload(role: str, n: int, user: str) -> dict | None:
 
 
 def _default_for(schema: type[TModel], role: str, user: str) -> TModel:
-    """没写脚本的角色：构造一个字段尽量宽松的默认对象，避免 fake 档位直接崩。"""
+    """没写脚本的角色：构造一个字段尽量宽松的默认对象，避免 fake 档位直接崩。
+
+    ★★ 两个坑都是真踩过的，别改回去 ★★
+
+    1) **有默认值的字段不要覆盖。** schema 自己写的默认值一定比"按类型猜一个"准确。
+       原来这里对每个字段都赋值，把 `EvidenceOpinion.verdict`（`Literal[...]`，
+       默认 `"sufficient"`）也写成了 `None` → 校验失败 → 抛 `LLMError` →
+       调用方的 `except Exception: pass` 把它吞掉。
+       表面症状是"**这条路径在 fake 档位下静默不执行**"，而真实档位会执行 ——
+       于是假档位的绿灯完全不能说明这条路径是通的。
+       这个"证据是否充分"的二次复核就长期处于这种状态：fake 里一次都没跑过。
+
+    2) `Literal` 要取**第一个允许值**，不能塞 None。而且这个判断必须排在
+       `"int" in ann` 之类的子串判断**之前** —— 否则 `Literal['interval', ...]`
+       会先命中 `"int"` 被当成整数，得到一个同样校验不过的默认值。
+    """
     data: dict[str, Any] = {}
-    for name, field in schema.model_fields.items():
-        ann = str(field.annotation)
-        if "bool" in ann:
+    for name, f in schema.model_fields.items():
+        if not f.is_required():
+            continue
+        ann = str(f.annotation)
+        allowed = re.findall(r"'([^']+)'", ann)
+        if "Literal" in ann and allowed:
+            data[name] = allowed[0]
+        elif "bool" in ann:
             data[name] = False
         elif "int" in ann:
             data[name] = 0

@@ -203,26 +203,36 @@ check('图执行异常会写服务端日志（logger.exception）',
       /logger\.exception\(/.test(apiRoutes),
       'routes.py 里没有 logger.exception —— 服务端异常在日志里将查无此事');
 
-// E9 ★ 引用编号的"宽/严"是有意为之的一对，别把它抹平。
+// E9 ★ 引用编号的容错：**三个**带 citations 的 schema 都要收得住裸字符串。
+//
 //    给回答类 Prompt 注入对话历史之后，模型会看到**上一轮回答**里的 [E1] 标记，
 //    于是顺手把它填进本轮的 citations —— 实测就是这么炸的：
-//      specialist_draft 结构化输出两次均不合格：citations.0 Input should be an object
-//      input_value='E1'
-//    → LLMError → 兜底转人工。顾客只问了一句"那个更适合我？"，
-//    收到的却是"已为您转接人工客服"，原因只是一个引用编号的写法。
-//    所以：专业 Agent 宽容（那里的 citations 不是溯源凭据），
-//    知识库草稿严格（那里的 citations **就是**可溯源的凭据本身）。
+//      citations.0 Input should be an object  input_value='E1'
+//    → 结构化输出连试两次不合格 → LLMError → 兜底转人工。
+//
+//    ★ 这里原本写的是"专业 Agent 宽容、知识库草稿严格"，理由是
+//      "知识库草稿的 citations 就是可溯源的凭据本身"。**那个判断是错的**：
+//      真实档位下 kb_limit（证据不足的降级路径，真实数据下最常走）6 次调用 4 次
+//      因为同一个形状问题失败，顾客收到的是"已为您转接人工客服"。
+//      而且 kb_limit 按定义就没有证据可引 —— 校验形状拦不住假引用；
+//      真正管"引用可不可溯源"的是下游 kb_verify 的逐句核对。
+//      现在收敛成一个共享类型 CitationList，三个 schema 共用，避免"修在一边"复发。
 const schemas = read('app/graph/schemas.py');
-const specBlock = schemas.slice(schemas.indexOf('class SpecialistDraftOut'),
-                                schemas.indexOf('class ReceiptOut'));
-const kbBlock = schemas.slice(schemas.indexOf('class KbDraftOut'),
-                              schemas.indexOf('class ClaimCheck'));
-check('专业 Agent 的 citations 容忍裸字符串（历史里的 [E1] 不该炸掉整轮）',
-      /_coerce_bare_ids/.test(specBlock),
-      'SpecialistDraftOut 没有裸字符串收敛 —— 上一轮的 [E1] 会让整轮变成转人工');
-check('知识库草稿的 citations 仍然严格（那是"可溯源"的凭据本身）',
-      !/_coerce_bare_ids|field_validator\("citations"/.test(kbBlock),
-      'KbDraftOut 也放宽了 —— 引用可能缺少 quote/doc_id，无法定位到原文');
+const citeTypeBlock = schemas.slice(schemas.indexOf('def _coerce_bare_ids'),
+                                    schemas.indexOf('class KbDraftOut'));
+check('CitationList 把裸字符串引用收成对象（历史里的 [E1] 不该炸掉整轮）',
+      /"evidence_id":\s*s\s*\}/.test(citeTypeBlock),
+      'CitationList 没有裸字符串收敛 —— 上一轮的 [E1] 会让整轮变成转人工');
+const USING = ['KbDraftOut', 'SpecialistDraftOut', 'ReceiptOut'];
+const noCoerce = USING.filter((n) => {
+  const i = schemas.indexOf(`class ${n}`);
+  if (i < 0) return true;
+  const block = schemas.slice(i, i + 400);
+  return !/citations:\s*CitationList/.test(block);
+});
+check('三个带 citations 的 schema 都用同一个容错类型（别再修在一边）',
+      noCoerce.length === 0,
+      `这些还写着 list[Citation]：${noCoerce.join('、')} —— 同一个字段各写一遍，修一处就是给另一处埋雷`);
 
 // E10 对话历史块必须提醒模型别抄历史里的引用编号
 check('注入历史时明确说明历史里的 [E1] 不属于本轮',

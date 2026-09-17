@@ -434,6 +434,109 @@ async def main() -> int:
     check("历史里**不含**本轮这句话（取历史的时机必须在保存本轮之前）",
           not any("那个怎么样" in str(h.get("content")) for h in hist), str(hist)[:160])
 
+    # ══════════════ 12 证据准入：绝对下限 + 相对系数 ══════════════
+    section("12. 证据准入（为什么不能用一条绝对分数线）")
+    # 为什么专门测：这里原来是一条 `score >= MIN_RERANK(0.30)` 的绝对线，
+    # 看着天经地义，实测却是**错的** —— bge-reranker-v2-m3 的分数是 sigmoid 概率，
+    # 绝对值取决于问法与文风。实测已审核资料上：
+    #     完全不相关的问题（天气/写诗/菜谱）  最高分 0.0000–0.0002
+    #     "皮秒做完会不会反黑"（资料字面有"反黑"） 0.1831
+    # 一条 0.30 的线卡掉的**全是相关的**：15 条检索验收里 5 条
+    # "命中了正确文档、分数却不到 0.30"，证据被丢光 → 回答降级成"资料不足"。
+    # 这类"阈值其实标定错了"的问题不会报错、不会告警，只会让答案悄悄变差，
+    # 所以必须用断言把**选法的语义**锁住，而不是锁一个具体数字。
+    from app.graph.sub_knowledge import select_evidence  # noqa: E402
+
+    def ev(scores):
+        return select_evidence([({"doc_id": f"D{i}"}, s) for i, s in enumerate(scores)],
+                               floor=0.02, rel_ratio=0.5, max_n=6)
+
+    check("全部不相关（最高分 0.0002）→ 一条都不要（拒绝凭空作答的保护还在）",
+          ev([0.0002, 0.0001, 0.0]) == [])
+    check("最高分低于下限 → 一条都不要", ev([0.019, 0.018]) == [])
+    check("相关但分数不高（0.183）→ **仍然保留**（这正是绝对分数线卡掉的那类）",
+          [round(s, 4) for _c, s in ev([0.1831, 0.092, 0.011])] == [0.1831, 0.092])
+    check("最高分一定被保留（相对规则不得把第一名筛掉）",
+          len(ev([0.05, 0.05, 0.05])) >= 1)
+    check("保留的是“最高分附近那一簇”，长尾被丢掉",
+          [round(s, 4) for _c, s in ev([0.90, 0.80, 0.40, 0.10])] == [0.90, 0.80])
+    check("候选数受 max_n 限制",
+          len(select_evidence([({"doc_id": f"D{i}"}, 0.9) for i in range(20)],
+                              floor=0.02, rel_ratio=0.5, max_n=6)) == 6)
+    check("输入乱序也能正确选（不依赖调用方先排好）",
+          [round(s, 4) for _c, s in ev([0.40, 0.90, 0.80])] == [0.9, 0.8])
+    check("空候选 → 空结果（不得抛异常）", ev([]) == [])
+    check("下调到下限刚好等于分数时算通过（边界取等号）", len(ev([0.02, 0.02])) == 2)
+
+    # ══════════════ 13 弱证据必须加复核 ══════════════
+    section("13. 弱证据必须多走一次独立复核（放松闸门就得同时加复核）")
+    # 为什么专门测：这轮把证据闸门从"一条绝对分数线"改成"下限 + 相对系数"，
+    # 结果是**更多轮次会带着分数不高的证据继续作答**。只放松、不加复核，
+    # 等于两处一起变松 —— 而这两处都站在"别答错"这条链上。
+    #
+    # ★ 这里的精排必须**造一个低分的**：假精排的分数下限是 0.30
+    #   （`0.30 + 重合度 × 0.02`），永远够不到"弱证据"那条线，
+    #   于是这条新路径在 fake 档位里根本走不到 —— 这也正是
+    #   "绝对阈值标定错了"当初始终没被测出来的原因：**假实现比真实情况乐观**，
+    #   而乐观的假实现会让依赖它的所有断言一起失去意义。
+    import dataclasses  # noqa: E402
+
+    class _LowReranker:
+        """故意返回低分：真实模型在口语提问上就是这个样子（实测 0.05–0.18）。"""
+
+        async def score(self, query: str, docs: list[str]) -> list[float]:
+            return [0.12] * len(docs)
+
+    # ★ 问法必须选**真的会走到知识库子图**的那一句：上面第 1 节就用它跑通了
+    #   kb_draft → 越界 → 修订 → 复审。我一开始随手写了个"热玛吉是怎么让皮肤变紧的"，
+    #   结果那一轮根本没进子图（角色里只有 clarify）—— 断言于是变成
+    #   "两次都没触发"，看着全绿其实什么也没验。**测试的前提本身也要被验证。**
+    WEAK_Q = "热玛吉和超声炮有什么区别"      # 刻意不含任何高影响词
+    deps_low = dataclasses.replace(deps, reranker=_LowReranker())
+    graph_low = build_graph(deps_low, checkpointer=InMemorySaver())
+
+    n0 = len(deps.pg.llm_calls)
+    await turn(graph_low, deps_low, "smoke-weak", WEAK_Q)
+    roles_low = [c["role"] for c in deps.pg.llm_calls[n0:]]
+    # ★ 先验前提本身：这一轮必须真的走到了"证据之后"（kb_draft 或 kb_limit）。
+    #   否则下面那条断言会因为"两次都没进子图"而变成**空跑通过** ——
+    #   这比断言失败更坏，因为它会让人以为这条路径被守住了。
+    check("前提：这一轮确实走到了知识库子图的证据之后",
+          any(r in roles_low for r in ("kb_draft", "kb_limit")), str(sorted(set(roles_low))))
+    check("低分证据 → 触发“证据是否充分”的独立复核",
+          "evidence_second_opinion" in roles_low, str(sorted(set(roles_low))))
+
+    n1 = len(deps.pg.llm_calls)
+    await turn(graph, deps, "smoke-strong", WEAK_Q)
+    roles_strong = [c["role"] for c in deps.pg.llm_calls[n1:]]
+    check("同一句话、证据分数够高时**不**触发（说明触发条件确实是“弱证据”）",
+          "evidence_second_opinion" not in roles_strong, str(sorted(set(roles_strong))))
+
+    # ══════════════ 14 引用字段的容错 ══════════════
+    section("14. citations 能收住裸字符串引用（否则整轮会变成转人工）")
+    # 为什么专门测：模型看到对话历史里上一轮回答的 `[E1]` 标记，会"顺手"把它填进
+    # 本轮的 citations。**这个坑复发过一次**：
+    #   · 第一回只给 `SpecialistDraftOut` 加了容错，理由是"知识库草稿的 citations
+    #     是溯源凭据，必须严格"；
+    #   · 结果真实档位下 `kb_limit`（证据不足的降级路径，真实数据下最常走）
+    #     6 次调用里 4 次因 `citations.0 Input should be an object` 失败 →
+    #     连试两次不合格 → LLMError → **兜底转人工**。
+    #   顾客问一句本该得到"资料不足 + 建议面诊"的话，收到的是"已为您转接人工客服"。
+    # 真正的"引用可溯源"由下游 `kb_verify` 逐句核对，跟 schema 的形状无关。
+    from app.graph.schemas import (  # noqa: E402
+        KbDraftOut, ReceiptOut, SpecialistDraftOut)
+
+    for _cls in (KbDraftOut, SpecialistDraftOut, ReceiptOut):
+        _name = _cls.__name__
+        _bad = _cls.model_validate({"content": "x", "citations": ["E1"]})
+        check(f"{_name} 收住裸字符串引用（不再抛校验错）",
+              [c.evidence_id for c in _bad.citations] == ["E1"], str(_bad.citations))
+        _good = _cls.model_validate(
+            {"content": "y", "citations": [{"evidence_id": "E1", "doc_id": "DOC-01",
+                                            "quote": "原文", "version": "v1"}]})
+        check(f"{_name} 正常对象原样通过（容错不等于放松）",
+              _good.citations[0].doc_id == "DOC-01", str(_good.citations))
+
     await deps.shutdown()
 
     # ══════════════ 汇总 ══════════════

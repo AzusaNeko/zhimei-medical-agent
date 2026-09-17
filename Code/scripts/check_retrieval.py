@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 warnings.filterwarnings("ignore")
 
+from app.graph.sub_knowledge import select_evidence  # noqa: E402
 from app.services.encoder import BgeM3Encoder  # noqa: E402
 from app.services.milvus_store import MilvusHybridStore  # noqa: E402
 from app.services.reranker import BgeReranker  # noqa: E402
@@ -81,7 +82,7 @@ FILTER_CASES: list[tuple[str, str, set[str], list[str]]] = [
 ]
 
 # ★ 安全关键用例：名字里带"安全关键"的，除了要命中对的文档，
-#   还必须达到证据阈值 —— 不达标直接让脚本失败（理由见文件末尾的 ③ 段注释）。
+#   还**必须真的留下证据** —— 丢光证据直接让脚本失败（理由见文件末尾 ③ 段的注释）。
 CRITICAL_NAMES: set[str] = {"安全关键"}
 
 
@@ -165,7 +166,8 @@ async def main() -> int:
         vecs = await enc.encode([q for _n, q, _e, _p in cases])
 
         results: list[tuple[bool, str]] = []
-        best_scores: list[tuple[str, float]] = []
+        # (用例名, 最高精排分, 实际留下来的证据条数) —— 第三条才是"会不会降级"的真正依据
+        ev_count: list[tuple[str, float, int]] = []
         for (name, query, expect, projects), dense, sparse in zip(
                 cases, vecs["dense"], vecs["sparse"]):
             hits = await store.search(query_text=query, query_dense=dense,
@@ -179,11 +181,11 @@ async def main() -> int:
                 if h["doc_id"] not in seen:
                     seen.append(h["doc_id"])
             got = set(seen[: args.top])
-            docs = [h["text"] for h in hits[: args.top * 2]]
-            scores = await reranker.score(query, docs)
+            # 候选就是"实际会送进精排的那几条"（与 kb_evidence 的候选范围一致）
+            cand = hits[: args.top * 2]
+            scores = await reranker.score(query, [h["text"] for h in cand])
             best_idx = max(range(len(scores)), key=lambda i: scores[i]) if scores else -1
             best = scores[best_idx] if best_idx >= 0 else 0.0
-            best_scores.append((name, best))
             ok = bool(expect & got)
             proj = "、".join(projects) if projects else "全库"
             line = (f"{'✓' if ok else '✗'} {name:12s} 精排 {best:.3f} [{proj}] "
@@ -196,6 +198,14 @@ async def main() -> int:
             if best < s.min_rerank and best_idx >= 0:
                 line += (f"\n        ↳ 最高分来自 [{hits[best_idx]['doc_id']}] "
                          f"{hits[best_idx]['text'][:56]}…")
+            # ★ 用**真实选法**算一遍"这一轮到底会留下几条证据"。
+            #   只报分数是不够的：分数低不等于证据会被丢掉 ——
+            #   那正是这次把绝对分数线换成"下限 + 相对系数"的原因。
+            kept = select_evidence(
+                [({"doc_id": h["doc_id"]}, sc) for h, sc in zip(cand, scores)],
+                floor=s.rerank_floor, rel_ratio=s.rerank_rel_ratio,
+                max_n=s.max_evidence)
+            ev_count.append((name, best, len(kept)))
             results.append((ok, line))
 
         print(f"\n① 检索命中验收（前 {args.top} 篇内含期望文档即通过）")
@@ -207,42 +217,52 @@ async def main() -> int:
         # ★ 阈值看的是**每个用例里最高的那个精排分**的最小值，而不是所有分数的全局最小值：
         #   同一次检索里必然有跑题的 chunk 分数很低（那正是精排的意义），
         #   把那些算进来，等于要求"连无关内容也得高分"，阈值永远不可能达标。
-        worst_name, worst = min(best_scores, key=lambda x: x[1]) if best_scores else ("-", 0.0)
-        below = [(n, sc) for n, sc in best_scores if sc < s.min_rerank]
+        worst_name, worst, _w = (min(ev_count, key=lambda x: x[1]) if ev_count
+                                 else ("-", 0.0, 0))
+        weak = [(n, sc) for n, sc, _k in ev_count if sc < s.min_rerank]
+        dropped = [(n, sc) for n, sc, k in ev_count if k == 0]
 
-        print(f"\n② 精排阈值（MIN_RERANK={s.min_rerank}）：{len(below)}/{len(best_scores)} 条"
-              f"最高分未达阈值；最低者 {worst:.4f}（{worst_name}）")
-        for n, sc in below:
-            print(f"   ⚠ {n} 最高分 {sc:.4f} → 该轮会一条证据都不保留，降级成“资料不足”")
+        print(f"\n② 证据准入（下限 {s.rerank_floor} + 相对系数 {s.rerank_rel_ratio}）"
+              f"：{len(ev_count) - len(dropped)}/{len(ev_count)} 条留下了证据")
+        print(f"   最低的最高分 {worst:.4f}（{worst_name}）"
+              f"；其中 {len(weak)} 条属于“弱证据”，会额外走一次独立复核")
+        for n, sc in dropped:
+            print(f"   ✗ {n} 最高分 {sc:.4f} → 一条证据都没留下（正确文档被闸门丢弃）")
 
         # ★★ 安全关键用例单独把关，并且**计入退出码** ★★
         #   为什么不能只当作警告：命中验收（①）只看"对的文档有没有进前 3"，
-        #   而证据阈值（②）决定"进了前 3 之后会不会被用"。两者可以同时出现
-        #   "①全绿 ②全红"——检索明明找到了正确资料，却因为分数不够而
-        #   一条都不用，最终回答退化成"我这边资料不足，建议面诊"。
+        #   而证据准入（②）决定"进了前 3 之后会不会被用"。两者可以同时出现
+        #   "①全绿 ②全红"——检索明明找到了正确资料，却一条都不用，
+        #   最终回答退化成"我这边资料不足，建议面诊"。
         #   对"打完玻尿酸眼睛发黑""术后发烧还更肿了"这类问题，
         #   这个降级结果是**危险的**：用户得到的印象是"没什么大不了的"。
-        #   所以安全关键的用例不达标必须让脚本失败，而不是在屏幕上闪一行 ✗。
-        crit_below = [(n, sc) for n, sc in below if n in CRITICAL_NAMES]
-        print(f"\n③ 安全关键用例的阈值检查（{len(CRITICAL_NAMES)} 条）")
-        if crit_below:
-            for n, sc in crit_below:
-                print(f"   ✗ {n} 最高分 {sc:.4f} < {s.min_rerank} —— "
+        #   所以安全关键用例丢光证据必须让脚本失败，而不是在屏幕上闪一行 ✗。
+        #
+        #   ⚠️ 这里判的是"**留下了几条证据**"，不是"分数有没有过某条线"。
+        #     这轮改动之前正好相反：分数到不了 0.30 就丢掉，于是三条安全用例里
+        #     有两条是"命中了正确文档却被丢弃"。分数低不等于证据没用。
+        crit_dropped = [n for n, _sc, k in ev_count if n in CRITICAL_NAMES and k == 0]
+        print(f"\n③ 安全关键用例的证据准入（{len(CRITICAL_NAMES)} 类）")
+        if crit_dropped:
+            for n in crit_dropped:
+                print(f"   ✗ {n} 一条证据都没留下 —— "
                       f"安全相关问题会被答成“资料不足”，必须修")
         else:
-            print("   ✓ 全部高于阈值：安全相关问题的证据会被正常使用")
+            print("   ✓ 安全关键用例都留下了证据（且弱证据会额外走一次独立复核）")
 
         print("\n" + "═" * 66)
-        print(f"检索验收：命中 {passed}/{total}"
-              + (f"，安全关键低于阈值 {len(crit_below)} 条" if crit_below else "，安全关键阈值通过"))
-        if passed == total and not crit_below:
+        print(f"检索验收：命中 {passed}/{total}，证据准入 {len(ev_count) - len(dropped)}/{len(ev_count)}"
+              + (f"，安全关键丢弃 {len(crit_dropped)} 条" if crit_dropped else "，安全关键通过"))
+        if passed == total and not crit_dropped and not dropped:
             print("检索链路 OK")
         elif passed != total:
             print("✗ 有用例未命中期望文档，见上面标 ✗ 的行")
+        elif crit_dropped:
+            print("✗ 命中都对，但安全关键用例丢光了证据 —— 会退化为“资料不足”")
         else:
-            print("✗ 命中都对，但安全关键用例不达证据阈值 —— 退化为“资料不足”")
+            print("✗ 命中都对，但有用例丢光了证据 —— 检查下限是否偏高")
         print("═" * 66)
-        return 0 if (passed == total and not crit_below) else 1
+        return 0 if (passed == total and not dropped) else 1
     finally:
         await enc.close()
         await reranker.close()

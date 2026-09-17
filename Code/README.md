@@ -11,7 +11,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 96 项断言全过） |
+| 图的接线、路由、预算、凭据、并发写冲突 | ✅ **已跑通**（`scripts/smoke.py` 114 项断言全过） |
 | 四个典型场景端到端演示 | ✅ 已验证（科普含修订环 / 预约含确认执行 / 紧急 / 澄清） |
 | **FastAPI + SSE 接口层** | ✅ **已实现并验证**（`scripts/smoke_api.py` 50 项 + `smoke_api_live.py` 57 项真实 HTTP） |
 | **运营后台（坐席工作台）** | ✅ **已实现并验证**（`scripts/smoke_ops.py` 77 项；面板 + 风险分级队列 + 跨模块联动） |
@@ -47,7 +47,7 @@ python scripts/check_env.py
 ```bash
 cd Code
 pip install -r requirements.txt        # 或者 uv pip install -r requirements.txt
-python scripts/smoke.py                # 96 项不变量断言
+python scripts/smoke.py                # 114 项不变量断言
 python -m app.cli --demo --profile fake
 ```
 
@@ -660,12 +660,12 @@ Code/
 │  │  └─ build.py              # ★ 主图装配
 │  └─ services/                # 模型网关 / 规则引擎 / 检索 / 存储 / 凭据 / 依赖容器
 ├─ scripts/
-│  ├─ smoke.py                 # 无需 pytest 的冒烟验证（96 项）
+│  ├─ smoke.py                 # 无需 pytest 的冒烟验证（114 项）
 │  ├─ check_store_parity.py    # PgStore 与 FakePg 的接口必须逐字一致
 │  ├─ check_schema.py          # 新建库 + 升级旧库两条路径都要能跑通（36 项）
 │  ├─ multi_turn_cases.py      # 多轮对话案例集（跨轮才会暴露的行为，见 SELF-TEST 6d）
 │  ├─ check_ui.cjs             # 前端静态校验：语法 / 节点表同步 / 测试工单隔离 / 页面启动 / 工作流架构 / 删除 / 风险分窗队列（96 项）
-│  ├─ check_retrieval.py       # 检索验收：带期望文档的表（15 条，含安全关键阈值把关）
+│  ├─ check_retrieval.py       # 检索验收：带期望文档的表（15 条；含"证据准入"与安全关键把关）
 │  └─ seed_kb.py               # 演示数据播种（15 篇 / 84 chunk，幂等 + Milvus 对账）
 ├─ sql/schema.sql              # app / ops schema 表结构 + 增量变更（加列必读文末第 10 节）
 ├─ docker-compose.yml          # Postgres + Milvus（etcd + minio）

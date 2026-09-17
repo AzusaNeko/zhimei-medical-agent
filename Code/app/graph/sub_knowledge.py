@@ -209,8 +209,13 @@ def build_knowledge_subgraph(deps: Deps):
         docs = [c.get("text", "") for c in candidates]
         scores = await deps.reranker.score(state.get("user_input", ""), docs)
         ranked = sorted(zip(candidates, scores), key=lambda x: -x[1])
-        kept = [(c, s) for c, s in ranked[: deps.settings.max_evidence]
-                if s >= deps.settings.min_rerank]
+        kept = select_evidence(ranked, floor=deps.settings.rerank_floor,
+                               rel_ratio=deps.settings.rerank_rel_ratio,
+                               max_n=deps.settings.max_evidence)
+        best = ranked[0][1] if ranked else 0.0
+        # 「弱证据」= 最高分没到 MIN_RERANK。它**不再是准入门槛**（理由见 select_evidence），
+        # 而是一个"要多查一道"的信号 —— 放在下面触发独立复核。
+        weak = bool(kept) and best < deps.settings.min_rerank
 
         evidence = [{
             "evidence_id": f"E{i + 1}", "doc_id": c.get("doc_id"), "title": c.get("title"),
@@ -219,8 +224,10 @@ def build_knowledge_subgraph(deps: Deps):
         } for i, (c, s) in enumerate(kept)]
 
         enough = bool(kept)
-        # 高影响 / 冲突：交给模型做一次"证据是否充分"的独立判断（不是生成回答）
-        if evidence and _high_impact(state):
+        # 高影响 / 弱证据：交给模型做一次"证据是否充分"的独立判断（不是生成回答）
+        # ★ 为什么弱证据也要走：我们刚刚把"相关但分数低"的证据从弃用改成使用，
+        #   那就必须让另一道判断来兜底 —— 放松闸门而不加复核，等于两处都变松。
+        if evidence and (_high_impact(state) or weak):
             try:
                 verdict: EvidenceOpinion = await deps.llm.structured(
                     "evidence_second_opinion", EvidenceOpinion,
@@ -235,8 +242,11 @@ def build_knowledge_subgraph(deps: Deps):
 
         return {"kb_evidence": evidence, "kb_enough": enough,
                 "audit_log": [{"event": "kb_evidence", "kept": len(evidence),
-                               "enough": enough,
-                               "top_score": evidence[0]["score"] if evidence else None}]}
+                               "enough": enough, "weak": weak,
+                               "top_score": evidence[0]["score"] if evidence else None,
+                               "best": round(float(best), 4),
+                               "floor": deps.settings.rerank_floor,
+                               "rel_ratio": deps.settings.rerank_rel_ratio}]}
 
     def after_evidence(state: dict) -> str:
         return "enough" if state.get("kb_enough") else "thin"
@@ -495,6 +505,51 @@ def _fallback_content(evidence: list[dict]) -> str:
     for e in evidence[:3]:
         lines.append(f"- {e.get('text', '')} [{e.get('evidence_id')}]")
     return "\n".join(lines)
+
+
+def select_evidence(ranked: list[tuple[dict, float]], *, floor: float,
+                    rel_ratio: float, max_n: int) -> list[tuple[dict, float]]:
+    """从精排结果里挑出真正拿去作答的证据。纯函数，便于确定性单测。
+
+    ★ 为什么不是"分数 >= 固定阈值"就完事（这条踩过坑，别再改回去）：
+
+      bge-reranker-v2-m3 的分数是 sigmoid 概率，**绝对值高度取决于问法与文风**，
+      而不只是"相不相关"。实测同一批已审核资料：
+
+          完全不相关的问题（天气 / 写诗 / 电影 / 菜谱）   最高分 0.0000 – 0.0002
+          "怎么确认这家店有没有资质"                     0.0548
+          "热玛吉有没有风险"                            0.1490
+          "皮秒做完会不会反黑"（资料里字面就有"反黑"）      0.1831
+
+      相关证据低到 0.05、不相关低到 0.000，**差三个数量级**。
+      用 0.30 这样一条绝对线去卡，卡掉的**全是相关的**：
+      15 条检索验收里有 5 条"命中了正确文档、分数却不到 0.30"，
+      于是 kb_evidence 一条证据都不留，回答降级成"资料不足 + 建议面诊" ——
+      检索明明找对了，是闸门把它扔了。
+
+    ★ 所以改成两条一起用：
+        · 绝对下限 `floor`：只负责回答"是不是**全都不相关**"。
+          取 0.02 —— 比最不相关的 0.0002 高两个数量级，又远低于最低的相关证据 0.0548，
+          中间是一段很宽的安全区。
+        · 相对系数 `rel_ratio`：在过了下限的候选里，只留"最高分附近"的那一簇，
+          丢掉明显更差的长尾。这替代了原来那条绝对线**想做的事**，
+          但它是相对于**本轮最好的证据**来判断的，因此不受问法与文风影响。
+
+    ★ 保证：只要最高分过了下限，它自己一定被保留 —— `rel_ratio <= 1` 时
+      `best >= best * rel_ratio` 恒成立。否则会出现"分数最高的那条被相对规则筛掉"
+      这种荒谬结果，而且因为候选少的时候最明显，会显得像"检索坏了"。
+    """
+    if not ranked:
+        return []
+    # 自己再排一次：依赖调用方先排好，是一个不会立刻报错、只会偶尔少给证据的隐患
+    ordered = sorted(ranked, key=lambda x: -x[1])
+    best = ordered[0][1]
+    if best < floor:
+        # 全都不过下限 → 一条都不要。这是"拒绝凭空作答"的那道保护，必须留着：
+        # 放宽的是"相关但分数低"，不是"什么都不相关也照答"。
+        return []
+    cutoff = max(floor, best * rel_ratio)
+    return [(c, s) for c, s in ordered[:max_n] if s >= cutoff]
 
 
 def _project_filter(state: dict) -> list[str] | None:
