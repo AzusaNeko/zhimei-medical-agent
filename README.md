@@ -113,7 +113,7 @@ python scripts/smoke.py            # 114 项不变量断言（不需要外部依
 | 检索验收 `check_retrieval.py` | 命中 15/15，**证据准入 15/15**，安全关键通过 |
 | 建库与升级 `check_schema.py` | 36 项 0 失败 |
 | 双存储一致 `check_store_parity.py` | 0 失败 |
-| 跨轮行为 `multi_turn_cases.py` | 7 个案例全过 |
+| 跨轮行为 `multi_turn_cases.py` | 12 个案例全过（含安全升级、引用污染、费用口径、资质核实） |
 
 **证据闸门的一个实测教训**（写在明面上，不藏在代码里）：原来只用一条
 `score >= MIN_RERANK(0.30)` 的绝对线筛选证据，实测是错的 —— bge-reranker-v2-m3 的分数是

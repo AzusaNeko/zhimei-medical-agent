@@ -234,6 +234,6 @@
 | `scripts/check_schema.py` 建库与升级 | 36 项 0 失败 |
 | `scripts/check_store_parity.py` 双存储一致 | 0 失败 |
 | `scripts/check_env.py` 环境体检 | 18 通过 / 2 提醒 / 0 阻塞 |
-| `scripts/multi_turn_cases.py` 跨轮行为 | 7 个案例全过 |
+| `scripts/multi_turn_cases.py` 跨轮行为 | 12 个案例全过 |
 
 复跑方式见 [`Code/README.md`](Code/README.md) 的"怎么跑起来"。
